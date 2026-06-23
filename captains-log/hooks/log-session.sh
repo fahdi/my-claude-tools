@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # Captain's Log — Claude Code Stop Hook
-#
 # Fires when a session ends. Reads the transcript, generates a Picard-style
 # log entry via claude -p, appends to the daily file, and pushes to GitHub.
-#
-# Config: set CAPTAINS_LOG_DIR to override the default diary location.
 
-DIARY_DIR="${CAPTAINS_LOG_DIR:-$HOME/Code/captains-log}"
+DIARY_DIR="${DIARY_DIR:-$HOME/Code/captains-log}"
 GLOBAL_LOCK="/tmp/captains-log-global"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Prevent recursive invocation — the claude -p call below also fires Stop
+# Prevent recursive invocation — claude -p in this script also triggers Stop
 if [ -f "$GLOBAL_LOCK" ]; then
     exit 0
 fi
@@ -24,10 +22,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Capture stdin (hook input JSON from Claude Code)
+# Capture stdin (hook input JSON)
 cat > "$INPUT_FILE"
 
-# Extract transcript path from hook payload
+# Extract transcript path
 TRANSCRIPT_PATH=$(INPUT_FILE="$INPUT_FILE" python3 - << 'PYEOF'
 import json, sys, os
 try:
@@ -43,72 +41,21 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
     exit 0
 fi
 
-# Parse transcript — extract conversation and count tool uses
-# Exits early (prints "0") if fewer than 2 tool uses (no real work done)
-TOOL_COUNT=$(TRANSCRIPT_PATH="$TRANSCRIPT_PATH" CONV_FILE="$CONV_FILE" python3 - << 'PYEOF'
-import json, sys, os
+# Parse transcript via module — outputs: first line = tool count, rest = message snippets
+PARSE_OUTPUT=$(python3 "$SCRIPT_DIR/parse_transcript.py" "$TRANSCRIPT_PATH" 2>/dev/null)
+TOOL_COUNT=$(echo "$PARSE_OUTPUT" | head -1)
+CONVERSATION=$(echo "$PARSE_OUTPUT" | tail -n +2 | head -25 | python3 -c "import sys; print('\n'.join(sys.stdin.read().splitlines()[-25:]))")
 
-transcript_path = os.environ['TRANSCRIPT_PATH']
-conv_file = os.environ['CONV_FILE']
-
-messages = []
-tool_use_count = 0
-
-try:
-    with open(transcript_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except Exception:
-                continue
-
-            role = msg.get('role', '')
-            content = msg.get('content', '')
-
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get('type') in ('tool_use', 'tool_result'):
-                        tool_use_count += 1
-                text_parts = [
-                    p.get('text', '') for p in content
-                    if isinstance(p, dict) and p.get('type') == 'text'
-                    and p.get('text', '').strip()
-                ]
-                text = ' '.join(text_parts)
-            elif isinstance(content, str):
-                text = content
-            else:
-                text = ''
-
-            if text and len(text.strip()) > 20:
-                snippet = text.strip()[:300].replace('\n', ' ')
-                messages.append(f"{role}: {snippet}")
-except Exception:
-    print("0")
-    sys.exit(0)
-
-if tool_use_count < 2:
-    print("0")
-    sys.exit(0)
-
-with open(conv_file, 'w') as f:
-    f.write('\n'.join(messages[-25:]))
-
-print(str(tool_use_count))
-PYEOF
-2>/dev/null || echo "0")
-
-if [ "$TOOL_COUNT" = "0" ] || [ -z "$TOOL_COUNT" ]; then
+if [ "$TOOL_COUNT" = "0" ] || [ -z "$TOOL_COUNT" ] || [ "$TOOL_COUNT" -lt 2 ] 2>/dev/null; then
     exit 0
 fi
 
-CONVERSATION=$(cat "$CONV_FILE" 2>/dev/null)
 if [ -z "$CONVERSATION" ]; then
     exit 0
 fi
+
+# Write conversation to temp file for prompt embedding
+echo "$CONVERSATION" > "$CONV_FILE"
 
 # Calculate stardate: (year - 1966) * 1000 + (day_of_year / 366 * 1000)
 STARDATE=$(python3 -c "
@@ -122,21 +69,33 @@ TODAY=$(date +%Y-%m-%d)
 TIME_NOW=$(date +%H:%M)
 LOG_FILE="$DIARY_DIR/$TODAY.md"
 
-# Build prompt in a file to avoid multiline quoting issues
+# Write prompt to file (avoids quoting issues with multiline strings)
 cat > "$PROMPT_FILE" << PROMPT_BOUNDARY
-You are Captain Jean-Luc Picard writing your Captain's Log about a software engineering session. Stardate: $STARDATE. Time: $TIME_NOW.
+You are Captain Jean-Luc Picard dictating your Captain's Log. Write a 150-200 word entry about a software engineering session.
 
-Based on this conversation excerpt, write a 150-200 word log entry in Picard's voice. Be formal, measured, reflective. Frame technical work as ship operations — bugs as hostile incursions, deployments as warp jumps, new code as capabilities brought online, debugging as forensic investigation. Do NOT reference "the USS Enterprise" by name. Start exactly with: "Captain's Log, Stardate $STARDATE."
+Voice and style rules -- study these carefully:
+- Picard speaks in complete, measured sentences. No sentence fragments.
+- He does NOT use em-dashes or hyphens mid-sentence. He uses commas, semicolons, and full stops instead.
+- He does NOT use contractions ("it is" not "it's", "we have" not "we've").
+- His tone is formal, weighty, and occasionally philosophical. He reflects on the meaning of the work, not just the mechanics.
+- He uses nautical and military framing naturally: "the crew", "ship's systems", "this vessel", "operations", "the mission".
+- Frame technical work as ship operations: bugs are system failures or hostile incursions, deployments are course changes or warp transitions, new code is a capability brought online, debugging is a forensic investigation.
+- He pauses to note what the work means, not just what was done. A line about what this effort serves is appropriate.
+- Do NOT mention "the USS Enterprise" by name.
+- Do NOT use em-dashes. Use commas or semicolons instead.
+
+Stardate: $STARDATE. Time: $TIME_NOW.
+Start the entry with exactly: "Captain's Log, Stardate $STARDATE."
 
 Conversation excerpt:
 $CONVERSATION
 PROMPT_BOUNDARY
 
-# Generate entry — claude -p runs non-interactively and does not re-trigger this hook
+# Generate entry via claude -p (non-interactive, no hooks triggered for inner session)
 ENTRY=$(claude -p < "$PROMPT_FILE" 2>/dev/null || echo "")
 
 if [ -z "$ENTRY" ]; then
-    ENTRY="Captain's Log, Stardate $STARDATE. A development session concluded at ${TIME_NOW}. ${TOOL_COUNT} operations were recorded during this engagement. The full account of today's work has not been transcribed."
+    ENTRY="Captain's Log, Stardate $STARDATE. A development session concluded at ${TIME_NOW} ship's time. ${TOOL_COUNT} operations were recorded. The full details of this engagement have not been transcribed."
 fi
 
 # Create daily file if needed
@@ -144,7 +103,7 @@ if [ ! -f "$LOG_FILE" ]; then
     printf "# Captain's Log — %s\n\n" "$TODAY" > "$LOG_FILE"
 fi
 
-# Append entry
+# Append entry with separator
 {
     echo ""
     echo "---"
@@ -155,20 +114,21 @@ fi
     echo ""
 } >> "$LOG_FILE"
 
-# Update README index — insert link at top of Entries section if date not present
+# Update README — insert link at top of Entries list if not already present
 if ! grep -qF "$TODAY" "$DIARY_DIR/README.md" 2>/dev/null; then
     TODAY="$TODAY" STARDATE="$STARDATE" DIARY_DIR="$DIARY_DIR" python3 - << 'PYEOF'
 import os
 
-today    = os.environ['TODAY']
+today = os.environ['TODAY']
 stardate = os.environ['STARDATE']
-readme   = os.path.join(os.environ['DIARY_DIR'], 'README.md')
+diary_dir = os.environ['DIARY_DIR']
+readme = os.path.join(diary_dir, 'README.md')
 
 with open(readme, 'r') as f:
     content = f.read()
 
 new_line = f'- [{today}]({today}.md) — Stardate {stardate}\n'
-marker   = '## Entries\n'
+marker = '## Entries\n'
 
 if marker in content:
     idx = content.index(marker) + len(marker)

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Mock for claude -p — outputs a fixed string so bats tests don't hit the API
+echo "Captain's Log, Stardate 99999.9. MOCK_LOG_ENTRY. This is a test entry."

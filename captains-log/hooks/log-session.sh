@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
 # Captain's Log — Claude Code Stop Hook
-# Fires when a session ends. Reads the transcript, generates a Picard-style
+# Fires on every Stop event. Reads the transcript, generates a Picard-style
 # log entry via claude -p, appends to the daily file, and pushes to GitHub.
+# If a log entry was written in the last 15 minutes, Picard reads it first and
+# only records what is genuinely new to the story — or stays silent if nothing changed.
 
 DIARY_DIR="${DIARY_DIR:-$HOME/Code/captains-log}"
-GLOBAL_LOCK="/tmp/captains-log-global"
+GLOBAL_LOCK="/tmp/captains-log-lock"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Prevent recursive invocation — claude -p in this script also triggers Stop
-if [ -f "$GLOBAL_LOCK" ]; then
+# Atomic lock via mkdir — prevents both recursive invocation (claude -p inside
+# also triggers Stop) and race conditions when multiple Stop hooks fire in parallel
+if ! mkdir "$GLOBAL_LOCK" 2>/dev/null; then
     exit 0
 fi
-touch "$GLOBAL_LOCK"
 
 INPUT_FILE=$(mktemp /tmp/captains-log-input-XXXXXX)
 CONV_FILE=$(mktemp /tmp/captains-log-conv-XXXXXX)
 PROMPT_FILE=$(mktemp /tmp/captains-log-prompt-XXXXXX)
 
 cleanup() {
-    rm -f "$GLOBAL_LOCK" "$INPUT_FILE" "$CONV_FILE" "$PROMPT_FILE" 2>/dev/null
+    rmdir "$GLOBAL_LOCK" 2>/dev/null
+    rm -f "$INPUT_FILE" "$CONV_FILE" "$PROMPT_FILE" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -69,8 +72,83 @@ TODAY=$(date +%Y-%m-%d)
 TIME_NOW=$(date +%H:%M)
 LOG_FILE="$DIARY_DIR/$TODAY.md"
 
-# Write prompt to file (avoids quoting issues with multiline strings)
-cat > "$PROMPT_FILE" << PROMPT_BOUNDARY
+# Check if an entry was written in the last 15 minutes.
+# If so, extract the text of that entry so Picard can read what was already said
+# and only add what is genuinely new — like a mid-mission update, not a retelling.
+RECENT_ENTRY=""
+if [ -f "$LOG_FILE" ]; then
+    RECENT_ENTRY=$(python3 - << 'PYEOF'
+import os, re, time
+
+log_file = os.environ.get('LOG_FILE', '')
+if not log_file or not os.path.exists(log_file):
+    raise SystemExit
+
+with open(log_file, 'r') as f:
+    content = f.read()
+
+# Split on the --- separators to get individual entries
+entries = re.split(r'\n---\n', content)
+
+# Find the last non-empty entry
+for entry in reversed(entries):
+    entry = entry.strip()
+    if not entry or not entry.startswith('*Logged at'):
+        continue
+    # Parse the timestamp from "*Logged at HH:MM*"
+    m = re.match(r'\*Logged at (\d{2}):(\d{2})\*', entry)
+    if not m:
+        continue
+    import datetime
+    today = datetime.date.today()
+    entry_time = datetime.datetime(today.year, today.month, today.day,
+                                   int(m.group(1)), int(m.group(2)))
+    now = datetime.datetime.now()
+    age_minutes = (now - entry_time).total_seconds() / 60
+    if age_minutes <= 15:
+        print(entry)
+    break
+PYEOF
+)
+fi
+
+# Build the prompt — two modes:
+# 1. Recent entry exists: Picard reads it and adds only new developments, or outputs NOTHING_NEW
+# 2. No recent entry: Picard writes a full entry as normal
+if [ -n "$RECENT_ENTRY" ]; then
+    cat > "$PROMPT_FILE" << PROMPT_BOUNDARY
+You are Captain Jean-Luc Picard dictating an update to your Captain's Log during an ongoing mission.
+
+You wrote the following log entry a short time ago:
+
+--- PREVIOUS ENTRY ---
+$RECENT_ENTRY
+--- END PREVIOUS ENTRY ---
+
+The mission has continued. Here is what has happened since:
+
+--- CURRENT MISSION ACTIVITY ---
+$CONVERSATION
+--- END ACTIVITY ---
+
+Your task: determine whether anything genuinely new has occurred that was NOT already captured in the previous entry. This may be a new problem solved, a new decision made, a new tool used, a new direction taken, or a new insight gained.
+
+If there is meaningful new development: write a SHORT addendum entry of 80-130 words in Picard's voice. This is a mid-mission update, not a retelling. Do NOT repeat what was already said. Begin with exactly: "Captain's Log, Stardate $STARDATE. Supplemental."
+
+If there is nothing meaningfully new: output only the single word NOTHING_NEW and nothing else.
+
+Voice rules (always apply):
+- Complete, measured sentences. No fragments.
+- No em-dashes. Use commas or semicolons.
+- No contractions.
+- Formal, weighty, occasionally philosophical.
+- Nautical/military framing: the crew, this vessel, the mission, ship's systems.
+- Frame technical work as ship operations.
+
+Stardate: $STARDATE. Time: $TIME_NOW.
+PROMPT_BOUNDARY
+else
+    cat > "$PROMPT_FILE" << PROMPT_BOUNDARY
 You are Captain Jean-Luc Picard dictating your Captain's Log. Write a 150-200 word entry about a software engineering session.
 
 Voice and style rules -- study these carefully:
@@ -90,12 +168,19 @@ Start the entry with exactly: "Captain's Log, Stardate $STARDATE."
 Conversation excerpt:
 $CONVERSATION
 PROMPT_BOUNDARY
+fi
 
 # Generate entry via claude -p (non-interactive, no hooks triggered for inner session)
 ENTRY=$(claude -p < "$PROMPT_FILE" 2>/dev/null || echo "")
 
-if [ -z "$ENTRY" ]; then
-    ENTRY="Captain's Log, Stardate $STARDATE. A development session concluded at ${TIME_NOW} ship's time. ${TOOL_COUNT} operations were recorded. The full details of this engagement have not been transcribed."
+# If Picard found nothing new to add, exit silently
+if [ -z "$ENTRY" ] || [ "$ENTRY" = "NOTHING_NEW" ]; then
+    if [ -n "$RECENT_ENTRY" ] && [ "$ENTRY" = "NOTHING_NEW" ]; then
+        exit 0
+    fi
+    if [ -z "$ENTRY" ]; then
+        ENTRY="Captain's Log, Stardate $STARDATE. A development session concluded at ${TIME_NOW} ship's time. ${TOOL_COUNT} operations were recorded. The full details of this engagement have not been transcribed."
+    fi
 fi
 
 # Create daily file if needed

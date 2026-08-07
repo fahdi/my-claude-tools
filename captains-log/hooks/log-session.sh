@@ -7,7 +7,29 @@
 
 DIARY_DIR="${DIARY_DIR:-$HOME/Code/captains-log}"
 GLOBAL_LOCK="/tmp/captains-log-lock"
+
+# Per-project opt-out: a .local-diary marker at or above the session cwd
+# silences the Captain's Log for that project (see dev-diary.sh for the
+# matching guard; project diaries set an explicit DIARY_DIR instead).
+if [ "$DIARY_DIR" = "$HOME/Code/captains-log" ]; then
+    _d="$PWD"
+    while [ "$_d" != "/" ]; do
+        [ -f "$_d/.local-diary" ] && exit 0
+        _d="$(dirname "$_d")"
+    done
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Reclaim a stale lock: if a prior run was SIGKILLed (e.g. hit the hook's
+# timeout while `claude -p` was still generating), its EXIT trap never fired
+# and the lock dir was left behind, wedging every future run silently.
+# The hook has a 60s timeout, so any lock older than that is dead.
+if [ -d "$GLOBAL_LOCK" ]; then
+    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$GLOBAL_LOCK" 2>/dev/null || echo 0) ))
+    if [ "$LOCK_AGE" -gt 90 ]; then
+        rmdir "$GLOBAL_LOCK" 2>/dev/null
+    fi
+fi
 
 # Atomic lock via mkdir — prevents both recursive invocation (claude -p inside
 # also triggers Stop) and race conditions when multiple Stop hooks fire in parallel

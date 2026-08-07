@@ -115,6 +115,22 @@ Beyond plugin-bundled skills, `~/.claude/skills/` carries standalone suites:
 Skills are cheap when idle (only descriptions load until invoked), so a wide
 library costs little and pays off whenever a task matches.
 
+## Agent tooling bench
+
+Standalone agent tools installed August 2026 for evaluation, outside the Claude
+Code harness itself:
+
+| Tool | Install | Verdict so far |
+|------|---------|----------------|
+| [browser-use](https://github.com/browser-use/browser-use) | uv project at `~/Code/agent-tools-lab` | Category leader for Python agent browser control. Overlaps with Claude in Chrome / Playwright / chrome-devtools in-harness; earns its keep only in standalone Python agents |
+| [headroom](https://github.com/headroomlabs-ai/headroom) | same venv (`headroom-ai[all]`, ships `headroom` CLI) | The interesting one: compresses tool outputs, logs, and RAG chunks before they reach the model. Same thesis as RTK at the library/proxy layer; evaluating whether it complements or duplicates it |
+| [nanobot](https://github.com/HKUDS/nanobot) | `uv tool install nanobot-ai` (global `nanobot` CLI, `nanobot webui`) | Self-hosted personal agent framework from HKUDS (the LightRAG lab). Promising, v0.3.0-grade maturity; kicking tires, not building on it |
+| [ai-agents-for-beginners](https://github.com/microsoft/ai-agents-for-beginners) | cloned to `~/Code/ai-agents-for-beginners` | Solid beginner course, wrong audience for this setup; kept for reference |
+
+context7 from the same sweep was already wired in (see MCP servers above).
+The lab venv is Python 3.13 via uv; run tools with `uv run` from
+`~/Code/agent-tools-lab`.
+
 ## Custom commands and statusline
 
 - **`/log`**: manual Captain's Log entry mid-session (the Stop hook covers exits)

@@ -1,6 +1,11 @@
 {
-  "$comment": "Sanitized version of ~/.claude/settings.json. Permissions allowlist omitted (it accumulates per-project entries). Paths assume $HOME expansion where shown.",
+  "$comment": "Sanitized version of ~/.claude/settings.json. Permissions allowlist omitted (it accumulates per-project entries). Secrets replaced with placeholders. Paths assume $HOME expansion where shown.",
   "model": "fable",
+  "env": {
+    "JIRA_TOKEN": "<your-jira-token>",
+    "JIRA_EMAIL": "<your-jira-email>",
+    "JIRA_BASE_URL": "<your-jira-base-url>"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -8,6 +13,18 @@
           {
             "type": "command",
             "command": "node \"$HOME/.claude/hooks/gsd-check-update.js\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/hooks/gsd-context-monitor.js\"",
+            "timeout": 10
           }
         ]
       }
@@ -29,18 +46,6 @@
           {
             "type": "command",
             "command": "rtk hook claude"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$HOME/.claude/hooks/gsd-context-monitor.js\"",
-            "timeout": 10
           }
         ]
       }
@@ -79,19 +84,5 @@
     "rust-analyzer-lsp@claude-plugins-official": true,
     "frontend-design@claude-plugins-official": true,
     "superpowers@claude-plugins-official": true
-  },
-  "extraKnownMarketplaces": {
-    "claude-plugins-official": {
-      "source": {
-        "source": "github",
-        "repo": "anthropics/claude-plugins-official"
-      }
-    },
-    "thedotmack": {
-      "source": {
-        "source": "github",
-        "repo": "thedotmack/claude-mem"
-      }
-    }
   }
 }

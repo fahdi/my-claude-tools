@@ -1,6 +1,6 @@
 # The stack
 
-Everything in my Claude Code setup as of August 2026, with sources. See
+Everything in my Claude Code setup as of mid-August 2026, with sources. See
 [how-i-work.md](./how-i-work.md) for why each piece exists;
 [../config/settings.example.json](../config/settings.example.json) shows how it wires together.
 
@@ -71,14 +71,30 @@ rtk proxy <cmd>       # raw passthrough for debugging
 
 ## MCP servers
 
-| Server | Scope | Purpose |
-|--------|-------|---------|
-| context7 | global | Current library/framework docs on demand (paired with a global rule that mandates its use) |
-| browser-tools | global | Console/network logs, audits from the browser |
-| playwright, notion, postman | per-project | Added only where a project needs them |
+Global servers (in `~/.claude.json`):
 
-Per-project servers stay per-project on purpose: every always-on server is context
-overhead in sessions that never use it.
+| Server | Transport | Purpose |
+|--------|-----------|---------|
+| context7 | http | Current library/framework docs on demand (paired with a global rule that mandates its use) |
+| figma | http | Official Figma server: read designs into code, generate designs from code, Code Connect mapping, FigJam diagrams |
+| browser-tools | stdio | Console/network logs, audits from the browser |
+
+On top of those, three more MCP surfaces arrive without their own server entries:
+
+- **claude-in-chrome** - Anthropic's Chrome extension exposes a full toolset
+  (tab context, navigation, computer control, page reading, forms, console and
+  network reads, JS eval, GIF recording) for driving my real logged-in browser
+- **chrome-devtools / playwright** - the plugins ship their MCP servers with
+  them: DevTools protocol (traces, Lighthouse, heap snapshots) and Playwright
+  automation respectively
+- **claude-mem mcp-search** - the memory plugin's search server: observation
+  search, timelines, tree-sitter `smart-explore` over codebases, and on-demand
+  corpus building over past sessions
+
+Per-project servers (notion, postman, Atlassian Rovo for Jira-heavy repos) stay
+per-project on purpose: every always-on server is context overhead in sessions
+that never use it. Newer harness builds defer MCP tool schemas until needed
+(loaded via ToolSearch), which makes even a wide server roster cheap at rest.
 
 ## Hooks
 
@@ -99,18 +115,27 @@ file and reclaims stale locks left by timed-out runs.
 
 ## Skills
 
-Beyond plugin-bundled skills, `~/.claude/skills/` carries standalone suites:
+Beyond plugin-bundled skills, `~/.claude/skills/` carries 59 standalone skills:
 
-- **SEO suite** (~30 skills + matching subagents): full audits, technical SEO,
-  schema, backlinks, local SEO, content briefs, topic clustering, GEO for AI search
-  (AI Overviews, ChatGPT, Perplexity), drift monitoring
-- **Design arsenal** (~13 skills, symlinked from `~/.agents/skills/`): anti-slop
-  frontend direction, high-end visual design, brand kits, image-to-code,
-  image generation direction for web and mobile, brutalist and minimalist styles
+- **SEO suite** (30 skills + matching subagents): full audits, single-page and
+  technical SEO, schema, backlinks, local SEO and maps intelligence, content
+  briefs and competitor pages, topic clustering, sitemaps, hreflang,
+  programmatic SEO, drift monitoring, GEO for AI search (AI Overviews, ChatGPT,
+  Perplexity), plus data-source extensions that light up when their API is
+  configured: DataForSEO, Ahrefs, Bing/IndexNow, SE Ranking, Profound,
+  Firecrawl, Unlighthouse, and AI image generation for OG/hero assets
+- **Design arsenal** (~18 skills): the design-taste-frontend pair (v2 default +
+  v1 pinned), gpt-taste and stitch-design-taste, high-end-visual-design,
+  redesign-existing-projects, image-to-code, imagegen direction for web and
+  mobile, brand kits, bencium UX designers (controlled + innovative),
+  industrial-brutalist and minimalist styles, use-of-color,
+  web-design-guidelines, full-output-enforcement
 - **Accessibility**: contrast-checker, link-purpose, accesslint-refactor
 - **React/mobile**: react-best-practices (Vercel), composition-patterns,
-  react-view-transitions, react-native-skills, ios-simulator-skill
+  react-view-transitions, react-native-skills, ios-simulator-skill (29 scripts
+  for simulator automation)
 - **ui-ux-pro-max**: style/palette/font-pairing reference across 10 stacks
+- **context7-mcp**: nudges library questions through the context7 docs server
 
 Skills are cheap when idle (only descriptions load until invoked), so a wide
 library costs little and pays off whenever a task matches.

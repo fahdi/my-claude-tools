@@ -65,7 +65,7 @@ export CAPTAINS_LOG_DIR="$HOME/Documents/my-dev-log"
 5. Appends to `DIARY_DIR/YYYY-MM-DD.md` and updates `README.md` with a reverse-chronological link
 6. Commits and pushes automatically
 
-A lockfile at `/tmp/captains-log-global` prevents the inner `claude -p` call from triggering another log entry (infinite loop guard).
+A lock directory at `/tmp/captains-log-lock` prevents the inner `claude -p` call from triggering another log entry (infinite loop guard). It is a directory rather than a file because `mkdir` is atomic, so two Stop hooks firing at once cannot both take it. A lock older than 90 seconds is treated as stale and reclaimed, since the hook's own 60-second timeout can kill a run before its cleanup trap fires.
 
 **Stardate formula**: `(year − 1966) × 1000 + (day_of_year ÷ 366 × 1000)`  
 Today's stardate: ~60478

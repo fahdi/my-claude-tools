@@ -43,7 +43,14 @@ browser session when a task needs logged-in state.
 ## GSD (Get Shit Done)
 
 Project orchestration framework from [gsd-build/get-shit-done](https://github.com/gsd-build/get-shit-done),
-installed via npm (`get-shit-done-cc`). It supplies:
+installed via npm (`get-shit-done-cc`, currently 1.42.3).
+
+> **Heads up:** npm now flags the package as deprecated on install —
+> *"Package no longer supported."* It installs and runs fine, but treat it as
+> on borrowed time and don't build anything load-bearing on it without a
+> migration plan.
+
+It supplies:
 
 - `/gsd:*` commands: new-project, discuss-phase, plan-phase, execute-phase,
   verify-work, debug, map-codebase, and about forty more
@@ -58,7 +65,8 @@ day-to-day loop (design council → issues → TDD slice) is described in
 
 ## RTK (Rust Token Killer)
 
-Token-optimizing CLI proxy, installed via Homebrew. A `PreToolUse` hook on Bash
+Token-optimizing CLI proxy. It is in homebrew-core now, so plain
+`brew install rtk` works with no tap (0.45.0 at time of writing). A `PreToolUse` hook on Bash
 rewrites commands through `rtk` transparently, filtering and compressing output
 before it hits the context window. 60-90% savings on routine dev operations.
 
@@ -75,7 +83,7 @@ Global servers (in `~/.claude.json`):
 
 | Server | Transport | Purpose |
 |--------|-----------|---------|
-| context7 | http | Current library/framework docs on demand (paired with a global rule that mandates its use) |
+| context7 | http | Current library/framework docs on demand (paired with a global rule that mandates its use). Hosted, no local node/npx: `claude mcp add --scope user --transport http context7 https://mcp.context7.com/mcp`. Works anonymously; set `CONTEXT7_API_KEY` for higher rate limits |
 | figma | http | Official Figma server: read designs into code, generate designs from code, Code Connect mapping, FigJam diagrams |
 | browser-tools | stdio | Console/network logs, audits from the browser |
 
@@ -167,3 +175,33 @@ The lab venv is Python 3.13 via uv; run tools with `uv run` from
 Default model is set in settings (`"model": "fable"` at the moment). Journaling
 hooks shell out to `claude -p` for prose generation, so they ride whatever the
 CLI default is.
+
+## Rebuilding this setup on a fresh Mac
+
+Verified end to end on a clean Apple Silicon Mac in August 2026, against
+Claude Code 2.1.235. The pieces below install without any interactive step:
+
+```bash
+brew install rtk bats-core          # token proxy + Captain's Log bats suite
+uv tool install pytest              # Captain's Log python suite
+npm install -g get-shit-done-cc     # GSD (see the deprecation note above)
+
+claude mcp add --scope user --transport http context7 https://mcp.context7.com/mcp
+claude plugin marketplace add thedotmack/claude-mem
+```
+
+Then `cd captains-log && make test` should report 10 pytest and 10 bats tests
+passing before you run `./install.sh`.
+
+### Two things worth knowing before you start
+
+**Adding a plugin marketplace writes to `~/.claude/settings.json`.** It lands
+as an `extraKnownMarketplaces` key, not in the `~/.claude/plugins/` directory
+where you might expect it. Anything that rewrites `settings.json` wholesale —
+a provisioning script, a config manager, a restored backup — silently drops
+your marketplaces along with your hooks. Merge into that file; never overwrite
+it.
+
+**`install.sh` is interactive.** It prompts for the diary location and offers
+to create a GitHub repo, so it needs a terminal. There is no unattended flag
+yet; run it by hand rather than from a setup script.

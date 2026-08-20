@@ -41,9 +41,13 @@ if [ ! -d "$DIARY_DIR" ]; then
     mkdir -p "$DIARY_DIR"
 fi
 
-# Copy hook script
+# Copy the hook and everything it calls. The hook runs parse_transcript.py
+# from its own directory, so shipping the shell script alone produces an
+# install that fails silently: the parse returns nothing, the tool count is
+# empty, and the hook exits 0 without ever writing an entry.
 mkdir -p "$DIARY_DIR/scripts"
 cp "$SCRIPT_DIR/hooks/log-session.sh" "$DIARY_DIR/scripts/log-session.sh"
+cp "$SCRIPT_DIR/hooks/parse_transcript.py" "$DIARY_DIR/scripts/parse_transcript.py"
 chmod +x "$DIARY_DIR/scripts/log-session.sh"
 success "Hook script installed at $DIARY_DIR/scripts/log-session.sh"
 

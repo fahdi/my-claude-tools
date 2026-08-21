@@ -186,7 +186,9 @@ CLI default is.
 ## Rebuilding this setup on a fresh Mac
 
 Verified end to end on a clean Apple Silicon Mac in August 2026, against
-Claude Code 2.1.235. The pieces below install without any interactive step:
+Claude Code 2.1.235. The pieces below install without any interactive step.
+For native Windows, see [windows.md](./windows.md) instead — the shape is the
+same but the prerequisites differ:
 
 ```bash
 brew install rtk bats-core          # token proxy + Captain's Log bats suite
@@ -212,7 +214,7 @@ gh repo create captains-log --private --source ~/Code/captains-log --remote=orig
 If you would rather wire it in by hand, clone the repo and run `./install.sh`
 instead — but pick one path or the other, since running both leaves you with two
 `Stop` hooks writing to the same diary. Either way, `cd captains-log && make test`
-should report 10 pytest and 11 bats tests passing first.
+should report 10 pytest and 16 bats tests passing first.
 
 ### Two things worth knowing before you start
 

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Stands in for a stat where the BSD `-f %m` form yields no mtime and the GNU
+# `-c %Y` form does — the situation on Linux, WSL, and Git Bash under Windows.
+# macOS is the other way round, which is why the portability bug this mock
+# exercises was invisible on the machine the hook was written on.
+case "$1" in
+    -c)
+        [ "$2" = "%Y" ] || { echo "stat: unsupported format $2" >&2; exit 1; }
+        python3 -c 'import os, sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$3"
+        ;;
+    -f)
+        echo "stat: cannot read file system information" >&2
+        exit 1
+        ;;
+    *)
+        echo "stat: unsupported invocation" >&2
+        exit 1
+        ;;
+esac

@@ -1,3 +1,10 @@
 #!/usr/bin/env bash
-# Mock for claude -p — outputs a fixed string so bats tests don't hit the API
+# Mock for `claude -p` — emits a fixed entry so bats tests never hit the API.
+# When MOCK_PROMPT_LOG is set, the prompt is captured there so tests can assert
+# on which prompt branch the hook took (full entry vs. supplemental).
+if [ -n "${MOCK_PROMPT_LOG:-}" ]; then
+    cat > "$MOCK_PROMPT_LOG"
+else
+    cat > /dev/null
+fi
 echo "Captain's Log, Stardate 99999.9. MOCK_LOG_ENTRY. This is a test entry."

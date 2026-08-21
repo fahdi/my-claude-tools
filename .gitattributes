@@ -1,0 +1,15 @@
+# Git for Windows defaults to core.autocrlf=true, which would check these files
+# out with CRLF endings. bash then fails on the first line with
+# "$'\r': command not found", so the hook dies before it does anything and the
+# failure looks like the tool silently not working. Pin every text file to LF.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.bats  text eol=lf
+*.json  text eol=lf
+*.jsonl text eol=lf
+*.md    text eol=lf
+
+# The bats mock has no extension but is a shell script all the same.
+captains-log/tests/mocks/claude text eol=lf

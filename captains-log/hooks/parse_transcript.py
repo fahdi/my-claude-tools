@@ -9,13 +9,17 @@ Returns (tool_count, messages) where:
 import json
 import sys
 
+# Every file this tool touches is UTF-8. Python on Windows still defaults open()
+# to the locale codepage (cp1252) below 3.15, which raises UnicodeDecodeError on
+# a transcript containing any non-Latin-1 character.
+
 
 def parse_transcript(path):
     messages = []
     tool_use_count = 0
 
     try:
-        with open(path) as f:
+        with open(path, encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
     except OSError:
         return 0, []

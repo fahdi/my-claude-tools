@@ -35,6 +35,10 @@ claude plugin install captains-log@my-claude-tools
 Each plugin still ships its own `install.sh` for people who would rather wire it
 in by hand. Use one path or the other, not both — see the plugin's README.
 
+Works on macOS, Linux, WSL, and native Windows. Windows needs
+[Git for Windows](https://git-scm.com/downloads/win), which is also what lets
+Claude Code use its own Bash tool — see [docs/windows.md](./docs/windows.md).
+
 ---
 
 ## Start here
@@ -44,6 +48,7 @@ in by hand. Use one path or the other, not both — see the plugin's README.
 | [docs/how-i-work.md](./docs/how-i-work.md) | The philosophy: plan-first collaboration, TDD slices, memory strategy, token economy, and the writing rules I hold Claude to |
 | [docs/stack.md](./docs/stack.md) | The full inventory: every plugin, skill, hook, MCP server, and CLI tool in my setup, with sources and install pointers |
 | [config/settings.example.json](./config/settings.example.json) | A sanitized copy of my `~/.claude/settings.json` showing how the hooks and plugins wire together |
+| [docs/windows.md](./docs/windows.md) | Step-by-step setup on native Windows, and what to check when a hook stays silent |
 
 ## The system in five lines
 

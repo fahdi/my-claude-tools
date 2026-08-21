@@ -102,8 +102,7 @@ Two `Stop` hooks journal every session that does real work, writing to two priva
 - **Dev Diary**: the facts. A prose lead plus files changed and commands run, extracted
   mechanically from the session transcript, plus decisions and follow-ups written by
   `claude -p`. When I need to know what actually happened on a date, this is the
-  source of truth. Not packaged in this repo yet; its source currently lives inside
-  the private diary repo it writes to.
+  source of truth. Packaged as the [dev-diary](../dev-diary/) plugin.
 
 Narrative for humans, facts for audits. Both fire automatically, so the record exists
 whether or not I remember to write it.

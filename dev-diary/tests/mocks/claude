@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Mock for `claude -p` so the bats suite never hits the API.
+cat > "${MOCK_PROMPT_LOG:-/dev/null}"
+echo "MOCK_DEV_DIARY_LEAD. A test session concluded."

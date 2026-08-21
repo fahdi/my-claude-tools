@@ -1,4 +1,4 @@
-PLUGINS := captains-log
+PLUGINS := captains-log dev-diary claude-workflows
 
 .PHONY: test validate
 
@@ -9,4 +9,7 @@ validate:
 
 # Run each plugin's own suite.
 test: validate
-	@for p in $(PLUGINS); do $(MAKE) -C $$p test-python test-bats || exit 1; done
+	$(MAKE) -C captains-log test-python test-bats
+	$(MAKE) -C dev-diary test-python test-bats
+	@echo "=== bootstrap ==="
+	bash -n scripts/bootstrap.sh && ./scripts/bootstrap.sh --dry-run >/dev/null && echo "bootstrap.sh OK"

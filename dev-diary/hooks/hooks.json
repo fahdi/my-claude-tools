@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/dev-diary.sh\"",
+            "timeout": 60,
+            "shell": "bash"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,45 +1,25 @@
 {
-  "$comment": "Sanitized version of ~/.claude/settings.json. Permissions allowlist omitted (it accumulates per-project entries). Secrets replaced with placeholders. Paths assume $HOME expansion where shown.",
+  "$comment": "A settings.json you can copy and have work. Every path and command here resolves after ./scripts/bootstrap.sh runs. The permissions allowlist is omitted because it accumulates per-project entries; secrets are placeholders. See config/README.md for what changed and why.",
   "model": "fable",
-  "env": {
-    "JIRA_TOKEN": "<your-jira-token>",
-    "JIRA_EMAIL": "<your-jira-email>",
-    "JIRA_BASE_URL": "<your-jira-base-url>"
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"$HOME/.claude/statusline.sh\""
+  },
+  "enabledPlugins": {
+    "captains-log@my-claude-tools": true,
+    "dev-diary@my-claude-tools": true,
+    "claude-workflows@my-claude-tools": true,
+    "superpowers@claude-plugins-official": true,
+    "plugin-dev@claude-plugins-official": true,
+    "claude-code-setup@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "chrome-devtools-mcp@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "claude-mem@thedotmack": true
   },
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$HOME/.claude/hooks/gsd-check-update.js\""
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$HOME/.claude/hooks/gsd-context-monitor.js\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$HOME/.claude/hooks/gsd-prompt-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [
@@ -49,40 +29,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/Code/captains-log/scripts/log-session.sh\"",
-            "timeout": 60
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/Code/devdiary/scripts/dev-diary.sh\"",
-            "timeout": 60
-          }
-        ]
-      }
     ]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "bash \"$HOME/.claude/statusline.sh\""
-  },
-  "enabledPlugins": {
-    "chrome-devtools-mcp@claude-plugins-official": true,
-    "claude-code-setup@claude-plugins-official": true,
-    "plugin-dev@claude-plugins-official": true,
-    "playwright@claude-plugins-official": true,
-    "claude-mem@thedotmack": true,
-    "rust-analyzer-lsp@claude-plugins-official": true,
-    "frontend-design@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true
   }
 }

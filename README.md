@@ -63,7 +63,7 @@ Picard and commits it to a private GitHub diary.
 > *"Captain's Log, Stardate 60478.1. We have brought a new authentication system online following a prolonged engagement with an OAuth provider whose documentation proved... resistant to interpretation. The crew performed admirably under pressure."*
 
 Every session that does real work gets logged on exit via a `Stop` hook. Manual
-entries via `/log`. Comes with a full pytest + bats test suite.
+entries via `/captains-log:log`. Comes with a full pytest + bats test suite.
 
 → [Setup guide](./captains-log/README.md)
 

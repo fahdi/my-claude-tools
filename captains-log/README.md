@@ -2,7 +2,7 @@
 
 A Claude Code Stop hook that automatically writes a developer diary in the voice of Captain Jean-Luc Picard.
 
-Every session that does real work (≥2 tool uses) gets a log entry when you exit. Manual entries available via the `/log` command.
+Every session that does real work (≥2 tool uses) gets a log entry when you exit. Manual entries available via the `/captains-log:log` command.
 
 ---
 

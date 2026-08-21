@@ -4,6 +4,12 @@ Everything in my Claude Code setup as of mid-August 2026, with sources. See
 [how-i-work.md](./how-i-work.md) for why each piece exists;
 [../config/settings.example.json](../config/settings.example.json) shows how it wires together.
 
+**This is an inventory of my machine, not a manifest of this repo.** Almost
+everything below installs from somewhere else — another marketplace, npm, Homebrew,
+or my own private repos. The only thing this repo actually ships is the
+`captains-log` plugin. The [README](../README.md#documented-here-but-not-shipped-here)
+maps which is which.
+
 ## Layout
 
 ```

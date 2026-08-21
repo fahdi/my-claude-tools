@@ -1,7 +1,17 @@
 # my-claude-tools
 
-My complete Claude Code setup: the tools I built, the plugins I run, the hooks that
-automate my sessions, and a guide to how I actually work with Claude day to day.
+Two things in one repo:
+
+1. **A Claude Code plugin marketplace** — the tools I built, packaged so that any
+   Claude pointed at this repo can install them in two lines.
+2. **A written account of my whole setup** — every plugin, skill, hook, MCP server
+   and CLI tool I run, and why each one earns its place.
+
+The second is much larger than the first, and the two are not the same set. Most of
+what [docs/stack.md](./docs/stack.md) describes is installed from somewhere else or
+is specific to my machine; what actually ships here is the one plugin in the table
+below. That gap is deliberate, and marked everywhere it matters, so you always know
+whether a thing is installable or merely documented.
 
 This is not a dotfiles dump. It is a working system that has shipped real projects
 (a crypto forecasting service, a transcription suite, WordPress plugins, marketing
@@ -58,7 +68,9 @@ Claude Code use its own Bash tool — see [docs/windows.md](./docs/windows.md).
 4. **Memory is infrastructure.** claude-mem observations plus a curated memory directory mean sessions build on each other instead of starting over.
 5. **Tokens are a budget.** RTK proxies shell commands (60-90% savings), claude-mem compresses recall, and skills load on demand.
 
-## Tools in this repo
+## Tools that ship here
+
+One, so far.
 
 ### [Captain's Log](./captains-log)
 
@@ -72,11 +84,37 @@ entries via `/captains-log:log`. Comes with a full pytest + bats test suite.
 
 → [Setup guide](./captains-log/README.md)
 
-Its factual counterpart, **Dev Diary**, runs as a second `Stop` hook in the same
-session: prose lead, files changed, commands run, decisions, follow-ups. The files
-changed and commands run are extracted mechanically from the transcript, so they are
-ground truth rather than LLM guesses. See [docs/how-i-work.md](./docs/how-i-work.md#the-record)
-for how the two fit together.
+---
+
+## Documented here, but not shipped here
+
+`docs/stack.md` inventories my full setup. Most of it is not in this repo, for one
+of three reasons: it belongs to somebody else, it is too entangled with my machine
+to be useful to you, or it has not been packaged yet. Nothing below is installable
+from this marketplace.
+
+| Thing | Where it actually is | Why it is not here |
+|-------|----------------------|--------------------|
+| **Dev Diary** | Source lives in my private diary repo at `~/Code/devdiary/scripts/` | Not packaged yet. This is the next thing on the list — see [Roadmap](#roadmap). |
+| **The skills library** (~59 skills: SEO, design, a11y, React) | `~/.claude/skills/` | A mix of third-party skills and client-specific work. Sources are listed in [docs/stack.md](./docs/stack.md#skills). |
+| **GSD lifecycle hooks** | `npm install -g get-shit-done-cc` | Someone else's project. |
+| **RTK** (shell-command token proxy) | `brew install rtk` | Someone else's project. |
+| **claude-mem, superpowers, and the other plugins** | Their own marketplaces | Install pointers are in [docs/stack.md](./docs/stack.md#plugins). |
+| **`statusline.sh`** | `~/.claude/statusline.sh` | Personal, and shown in [config/settings.example.json](./config/settings.example.json). |
+
+**Dev Diary** is worth a word since it is referenced throughout the docs: it is the
+factual counterpart to Captain's Log, running as a second `Stop` hook in the same
+session. Prose lead, files changed, commands run, decisions, follow-ups — with the
+files and commands extracted mechanically from the transcript, so they are ground
+truth rather than LLM guesses. See
+[docs/how-i-work.md](./docs/how-i-work.md#the-record) for how the two fit together.
+
+## Roadmap
+
+- Package **Dev Diary** as a second plugin in this marketplace, with the same
+  cross-platform treatment Captain's Log got.
+- Extract whichever of my standalone skills are general enough to be useful to
+  someone who is not me, and ship them as a skills plugin.
 
 ---
 
@@ -93,8 +131,18 @@ my-claude-tools/
 │   ├── tests/             # pytest + bats
 │   └── install.sh         # Standalone install path
 ├── config/                # Sanitized settings.json reference
-└── docs/                  # How I work, full stack inventory
+└── docs/                  # How I work, full stack inventory, Windows setup
 ```
+
+**Why is there no top-level `skills/`, `agents/`, or `hooks/` directory?** Because
+those are *per-plugin* directories, not repo-level ones. Claude Code discovers
+components inside each plugin folder, which is why the command and hook above live
+at `captains-log/commands/` and `captains-log/hooks/`. `captains-log` happens to
+ship no skills and no agents, so those two directories simply do not exist yet. A
+plugin that needed them would add them under its own folder — never at the root.
+
+Likewise there is only one tool directory because only one tool is packaged. Adding
+a second means adding a sibling of `captains-log/`, built the same way.
 
 ## Contributing
 

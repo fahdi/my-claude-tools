@@ -4,11 +4,16 @@ Everything in my Claude Code setup as of mid-August 2026, with sources. See
 [how-i-work.md](./how-i-work.md) for why each piece exists;
 [../config/settings.example.json](../config/settings.example.json) shows how it wires together.
 
-**This is an inventory of my machine, not a manifest of this repo.** Almost
-everything below installs from somewhere else — another marketplace, npm, Homebrew,
-or my own private repos. The only thing this repo actually ships is the
-`captains-log` plugin. The [README](../README.md#documented-here-but-not-shipped-here)
-maps which is which.
+**This is an inventory of a setup, not a manifest of this repo.** Most of it
+installs from somewhere else — another marketplace, npm, or Homebrew — and
+[`scripts/bootstrap.sh`](../scripts/bootstrap.sh) installs the whole current set
+in one command. What this repo itself ships is three plugins: `captains-log`,
+`dev-diary`, and `claude-workflows`.
+
+Sections tagged **[current]** are live on my primary machine today. Sections
+tagged **[archive]** describe tooling from earlier in the year that lives on
+another machine and is kept here for reference; `bootstrap.sh` does not install
+it, and `config/settings.example.json` no longer references it.
 
 ## Layout
 
@@ -28,7 +33,7 @@ maps which is which.
 └── projects/.../memory/   # curated cross-session memory (MEMORY.md index)
 ```
 
-## Plugins
+## Plugins [current]
 
 Installed from marketplaces via `/plugin`:
 
@@ -46,7 +51,7 @@ Installed from marketplaces via `/plugin`:
 Plus **Claude in Chrome** (Anthropic's browser extension) for driving my real
 browser session when a task needs logged-in state.
 
-## GSD (Get Shit Done)
+## GSD (Get Shit Done) [archive]
 
 Project orchestration framework from [gsd-build/get-shit-done](https://github.com/gsd-build/get-shit-done),
 installed via npm (`get-shit-done-cc`, currently 1.42.3).
@@ -69,7 +74,7 @@ GSD is the heavyweight option for greenfield or multi-phase work. The lightweigh
 day-to-day loop (design council → issues → TDD slice) is described in
 [how-i-work.md](./how-i-work.md#the-delivery-loop).
 
-## RTK (Rust Token Killer)
+## RTK (Rust Token Killer) [current]
 
 Token-optimizing CLI proxy. It is in homebrew-core now, so plain
 `brew install rtk` works with no tap (0.45.0 at time of writing). A `PreToolUse` hook on Bash
@@ -83,7 +88,7 @@ rtk discover          # scan Claude Code history for missed opportunities
 rtk proxy <cmd>       # raw passthrough for debugging
 ```
 
-## MCP servers
+## MCP servers [current]
 
 Global servers (in `~/.claude.json`):
 
@@ -110,7 +115,7 @@ per-project on purpose: every always-on server is context overhead in sessions
 that never use it. Newer harness builds defer MCP tool schemas until needed
 (loaded via ToolSearch), which makes even a wide server roster cheap at rest.
 
-## Hooks
+## Hooks [current]
 
 The full lifecycle, from `~/.claude/settings.json`:
 
@@ -120,8 +125,13 @@ The full lifecycle, from `~/.claude/settings.json`:
 | PreToolUse (Bash) | `rtk hook claude` | Rewrite commands through the RTK proxy |
 | PreToolUse (Write/Edit) | gsd-prompt-guard.js | GSD workflow guard |
 | PostToolUse (Bash/Edit/Write/Agent) | gsd-context-monitor.js | Track context usage |
-| Stop | captains-log/log-session.sh | Narrative session journal (Picard) |
-| Stop | devdiary/dev-diary.sh | Factual session journal (files, commands, decisions) |
+| Stop | captains-log plugin | Narrative session journal (Picard) |
+| Stop | dev-diary plugin | Factual session journal (files, commands, decisions) |
+
+Both `Stop` hooks now arrive through their plugin manifests rather than
+`settings.json`. The GSD rows above are [archive]: those scripts are not present
+on a machine set up from this repo, and pointing a hook at a script that is not
+there makes Claude Code report a failure on every matching event.
 
 Both Stop hooks are lock-protected and skip sessions that did no real work. The
 Captain's Log hook also supports a per-project opt-out via a `.local-diary` marker
@@ -132,7 +142,11 @@ a plugin instead registers the same `Stop` hook through
 `captains-log/hooks/hooks.json`, so it never appears in `settings.json` at all —
 which is why the sanitized config in `config/` still shows the explicit path.
 
-## Skills
+## Skills [archive]
+
+The library below lives on another machine. My primary machine currently carries
+one standalone skill, `software-factory`, which is packaged in this repo as the
+[`claude-workflows`](../claude-workflows) plugin.
 
 Beyond plugin-bundled skills, `~/.claude/skills/` carries 59 standalone skills:
 
@@ -159,7 +173,7 @@ Beyond plugin-bundled skills, `~/.claude/skills/` carries 59 standalone skills:
 Skills are cheap when idle (only descriptions load until invoked), so a wide
 library costs little and pays off whenever a task matches.
 
-## Agent tooling bench
+## Agent tooling bench [archive]
 
 Standalone agent tools installed August 2026 for evaluation, outside the Claude
 Code harness itself:
@@ -175,7 +189,7 @@ context7 from the same sweep was already wired in (see MCP servers above).
 The lab venv is Python 3.13 via uv; run tools with `uv run` from
 `~/Code/agent-tools-lab`.
 
-## Custom commands and statusline
+## Custom commands and statusline [current]
 
 - **`/captains-log:log`**: manual Captain's Log entry mid-session (the Stop hook
   covers exits). The script installer registers it as plain `/log` instead; the
@@ -189,12 +203,28 @@ Default model is set in settings (`"model": "fable"` at the moment). Journaling
 hooks shell out to `claude -p` for prose generation, so they ride whatever the
 CLI default is.
 
-## Rebuilding this setup on a fresh Mac
+## Rebuilding this setup on a fresh machine
+
+One command does all of it:
+
+```bash
+git clone https://github.com/fahdi/my-claude-tools
+cd my-claude-tools
+./scripts/bootstrap.sh
+```
+
+That adds the marketplaces, installs the plugins listed under **[current]**
+above, registers the context7 MCP server, and installs `rtk`, `bats-core`, and
+`pytest`. Every step is idempotent. `--dry-run` prints the plan without changing
+anything; `--skip-cli` skips the Homebrew and uv installs.
+
+For native Windows, run it from **Git Bash** and read
+[windows.md](./windows.md) first for the prerequisites.
+
+### Doing it by hand
 
 Verified end to end on a clean Apple Silicon Mac in August 2026, against
-Claude Code 2.1.235. The pieces below install without any interactive step.
-For native Windows, see [windows.md](./windows.md) instead — the shape is the
-same but the prerequisites differ:
+Claude Code 2.1.235:
 
 ```bash
 brew install rtk bats-core          # token proxy + Captain's Log bats suite
@@ -203,24 +233,27 @@ npm install -g get-shit-done-cc     # GSD (see the deprecation note above)
 
 claude mcp add --scope user --transport http context7 https://mcp.context7.com/mcp
 claude plugin marketplace add thedotmack/claude-mem
+claude plugin marketplace add anthropics/claude-plugins-official
 
-# Captain's Log, from this repo
+# The three plugins from this repo
 claude plugin marketplace add fahdi/my-claude-tools
 claude plugin install captains-log@my-claude-tools
+claude plugin install dev-diary@my-claude-tools
+claude plugin install claude-workflows@my-claude-tools
 ```
 
-That is the whole Captain's Log install. The hook creates and git-initialises the
-diary at `~/Code/captains-log` the first time a session earns an entry, and adding
-a GitHub remote afterwards is optional:
+Both diaries create and git-initialise themselves — at `~/Code/captains-log` and
+`~/Code/devdiary` — the first time a session earns an entry. Adding a GitHub
+remote afterwards is optional:
 
 ```bash
 gh repo create captains-log --private --source ~/Code/captains-log --remote=origin --push
+gh repo create devdiary     --private --source ~/Code/devdiary     --remote=origin --push
 ```
 
-If you would rather wire it in by hand, clone the repo and run `./install.sh`
-instead — but pick one path or the other, since running both leaves you with two
-`Stop` hooks writing to the same diary. Either way, `cd captains-log && make test`
-should report 10 pytest and 16 bats tests passing first.
+Captain's Log can also be wired in by hand with `./install.sh` — but pick one
+path or the other, since running both leaves you with two `Stop` hooks writing to
+the same diary. Either way, `make test` at the repo root should pass first.
 
 ### Two things worth knowing before you start
 
@@ -231,7 +264,8 @@ a provisioning script, a config manager, a restored backup — silently drops
 your marketplaces along with your hooks. Merge into that file; never overwrite
 it.
 
-**`install.sh` is interactive.** It prompts for the diary location and offers
-to create a GitHub repo, so it needs a terminal. There is no unattended flag
-yet; run it by hand rather than from a setup script. The plugin install has no
-interactive step, which is why the block above uses it.
+**`install.sh` is interactive.** Captain's Log's standalone installer prompts
+for the diary location and offers to create a GitHub repo, so it needs a
+terminal. There is no unattended flag; run it by hand rather than from a setup
+script. The plugin install has no interactive step, and `bootstrap.sh` takes
+`--yes`, which is why neither of those blocks uses it.

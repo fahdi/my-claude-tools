@@ -2,7 +2,7 @@
 
 A Claude Code Stop hook that automatically writes a developer diary in the voice of Captain Jean-Luc Picard.
 
-Every session that does real work (≥2 tool uses) gets a log entry when you exit. Manual entries available via the `/log` command.
+Every session that does real work (≥2 tool uses) gets a log entry when you exit. Manual entries available via the `/captains-log:log` command.
 
 ---
 
@@ -32,7 +32,44 @@ The mission continues. There is still much to do.
 
 ## Setup
 
-### 1. Install
+### Install as a plugin (recommended)
+
+From inside Claude Code:
+
+```
+/plugin marketplace add fahdi/my-claude-tools
+/plugin install captains-log@my-claude-tools
+```
+
+Or from a shell:
+
+```bash
+claude plugin marketplace add fahdi/my-claude-tools
+claude plugin install captains-log@my-claude-tools
+```
+
+That is the whole install. The plugin registers the `Stop` hook and the
+`/captains-log:log` command, and the hook creates and git-initialises your diary
+at `~/Code/captains-log` the first time a session earns an entry. Nothing is
+copied into `~/.claude/` and nothing is written into your `settings.json` hooks
+block.
+
+The plugin does not create a GitHub remote for you. Once the diary exists, add
+one yourself if you want it backed up:
+
+```bash
+gh repo create captains-log --private --source ~/Code/captains-log --remote=origin --push
+```
+
+The hook pushes on every entry when an `origin` remote exists, and stays local
+when it does not.
+
+### Install with the script (alternative)
+
+`install.sh` predates the plugin packaging and still works. It copies the hook
+into your diary directory, writes the `Stop` hook into `~/.claude/settings.json`,
+installs `/log` into `~/.claude/commands/`, and offers to create the private
+GitHub repo for you:
 
 ```bash
 git clone https://github.com/fahdi/my-claude-tools
@@ -40,19 +77,18 @@ cd my-claude-tools/captains-log
 ./install.sh
 ```
 
-The installer will:
-- Create your diary repo at `~/Code/captains-log` (configurable)
-- Add the Stop hook to `~/.claude/settings.json`
-- Install the `/log` command to `~/.claude/commands/`
-- Initialize a git repo for your diary and push to GitHub (optional)
+**Pick one or the other.** Running both gives you two `Stop` hooks pointing at
+the same diary, which means two entries per session.
 
-### 2. Configure (optional)
+### Configure (optional)
 
 Set `CAPTAINS_LOG_DIR` in your environment to use a custom diary path:
 
 ```bash
 export CAPTAINS_LOG_DIR="$HOME/Documents/my-dev-log"
 ```
+
+`DIARY_DIR` is also honoured and takes precedence when both are set.
 
 ---
 
@@ -74,7 +110,7 @@ Today's stardate: ~60478
 
 ## Manual logging
 
-Type `/log` in any Claude Code session to trigger an entry on demand. Useful for mid-session milestones or when you want to narrate before exiting.
+Type `/captains-log:log` in any Claude Code session to trigger an entry on demand (the script installer registers it as plain `/log`). Useful for mid-session milestones or when you want to narrate before exiting.
 
 ---
 
@@ -82,12 +118,18 @@ Type `/log` in any Claude Code session to trigger an entry on demand. Useful for
 
 ```
 captains-log/
-├── README.md          # This file
-├── install.sh         # One-command installer
+├── .claude-plugin/
+│   └── plugin.json         # Plugin manifest
+├── README.md               # This file
+├── install.sh              # Standalone installer (alternative to the plugin)
+├── Makefile                # make test / make validate
 ├── hooks/
-│   └── log-session.sh # Stop hook — runs on session exit
-└── commands/
-    └── log.md         # /log command definition
+│   ├── hooks.json          # Stop hook registration for the plugin
+│   ├── log-session.sh      # Stop hook — runs on session exit
+│   └── parse_transcript.py # Transcript parser the hook shells out to
+├── commands/
+│   └── log.md              # /captains-log:log command definition
+└── tests/                  # pytest + bats suites
 ```
 
 ---

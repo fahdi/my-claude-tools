@@ -5,13 +5,19 @@
 # If a log entry was written in the last 15 minutes, Picard reads it first and
 # only records what is genuinely new to the story — or stays silent if nothing changed.
 
-DIARY_DIR="${DIARY_DIR:-$HOME/Code/captains-log}"
+# CAPTAINS_LOG_DIR is the documented knob (README, install.sh, /log command).
+# DIARY_DIR stays supported and wins when both are set, so an explicitly wired
+# per-project diary and the test suite keep working. Before this, the hook read
+# only DIARY_DIR, so setting CAPTAINS_LOG_DIR moved the installed files but not
+# where the hook actually wrote.
+DEFAULT_DIARY_DIR="$HOME/Code/captains-log"
+DIARY_DIR="${DIARY_DIR:-${CAPTAINS_LOG_DIR:-$DEFAULT_DIARY_DIR}}"
 GLOBAL_LOCK="/tmp/captains-log-lock"
 
 # Per-project opt-out: a .local-diary marker at or above the session cwd
 # silences the Captain's Log for that project (see dev-diary.sh for the
 # matching guard; project diaries set an explicit DIARY_DIR instead).
-if [ "$DIARY_DIR" = "$HOME/Code/captains-log" ]; then
+if [ "$DIARY_DIR" = "$DEFAULT_DIARY_DIR" ]; then
     _d="$PWD"
     while [ "$_d" != "/" ]; do
         [ -f "$_d/.local-diary" ] && exit 0
@@ -93,6 +99,32 @@ print(f'{(now.year - 1966) * 1000 + day * 1000 / 366:.1f}')
 TODAY=$(date +%Y-%m-%d)
 TIME_NOW=$(date +%H:%M)
 LOG_FILE="$DIARY_DIR/$TODAY.md"
+
+# Bootstrap the diary on first run so a plugin install needs no setup step.
+# install.sh does the same thing plus optional GitHub repo creation; this is
+# the zero-touch path for `/plugin install captains-log@my-claude-tools`.
+# It runs only after the tool-count gate, so a skipped session leaves no trace.
+mkdir -p "$DIARY_DIR" 2>/dev/null || exit 0
+if [ ! -f "$DIARY_DIR/README.md" ]; then
+    cat > "$DIARY_DIR/README.md" << 'BOOTSTRAP_README'
+# Captain's Log
+
+> *"The human adventure is just beginning."*
+
+A developer log narrated in the voice of Captain Jean-Luc Picard.
+Every Claude Code session that completes meaningful work earns an entry.
+
+Logged automatically via a Claude Code Stop hook. Manual entries via `/captains-log:log`.
+
+---
+
+## Entries
+
+BOOTSTRAP_README
+fi
+if [ ! -d "$DIARY_DIR/.git" ]; then
+    git -C "$DIARY_DIR" init -b main -q 2>/dev/null || git -C "$DIARY_DIR" init -q 2>/dev/null || true
+fi
 
 # Check if an entry was written in the last 15 minutes.
 # If so, extract the text of that entry so Picard can read what was already said
@@ -254,6 +286,8 @@ fi
 cd "$DIARY_DIR"
 git add -A
 if ! git diff --cached --quiet 2>/dev/null; then
-    git commit -m "Captain's Log: $TODAY at $TIME_NOW"
-    git push origin main 2>/dev/null || true
+    git commit -m "Captain's Log: $TODAY at $TIME_NOW" >/dev/null 2>&1
+    if git remote get-url origin >/dev/null 2>&1; then
+        git push origin main >/dev/null 2>&1 || true
+    fi
 fi

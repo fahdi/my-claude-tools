@@ -2,6 +2,11 @@
 
 A Claude Code Stop hook that automatically writes a developer diary in the voice of Captain Jean-Luc Picard.
 
+This one is for enjoyment. Its factual counterpart, [Dev Diary](../dev-diary),
+is the record you keep on every project; Captain's Log is the one you switch on
+for the projects you are enjoying. `/plugin disable captains-log` and
+`/plugin enable captains-log` flip it at any time.
+
 Every session that does real work (≥2 tool uses) gets a log entry when you exit. Manual entries available via the `/captains-log:log` command.
 
 ---

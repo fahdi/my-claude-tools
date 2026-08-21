@@ -35,7 +35,14 @@ That adds the marketplaces, installs all three plugins here plus the eight
 third-party ones I run, registers the context7 MCP server, and installs the CLI
 tools they depend on. Every step is idempotent, so running it again on a
 half-configured machine finishes the job instead of starting over. `--dry-run`
-prints the plan without touching anything; `--skip-cli` leaves Homebrew alone.
+prints the plan without touching anything; `--skip-cli` leaves Homebrew alone;
+`--no-captains-log` skips the Picard diary.
+
+**Dev Diary is the one to keep everywhere; Captain's Log is the one you turn on
+where you want it.** The factual record earns its place on every project. The
+Picard narration earns its place on the projects you are enjoying. Either can be
+switched at any time with `/plugin disable captains-log` and `/plugin enable
+captains-log`, so the choice at install time is not binding.
 
 ### Just the plugins from this repo
 
@@ -48,7 +55,7 @@ From inside Claude Code:
 
 | Plugin | What you get |
 |--------|--------------|
-| [`captains-log`](./captains-log) | A `Stop` hook that narrates each session as Picard, plus the `/captains-log:log` command |
+| [`captains-log`](./captains-log) | A `Stop` hook that narrates each session as Picard, plus the `/captains-log:log` command. Optional — see below |
 | [`dev-diary`](./dev-diary) | A `Stop` hook that records the facts: files changed and commands run, extracted mechanically from the transcript |
 | [`claude-workflows`](./claude-workflows) | The `software-factory` skill: four approval gates before implementation code exists |
 

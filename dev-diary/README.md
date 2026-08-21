@@ -49,6 +49,10 @@ The two are designed to run together as two `Stop` hooks in the same session,
 and installing both plugins is the supported arrangement. They take separate
 locks and write to separate diaries, so neither blocks the other.
 
+Dev Diary stands alone perfectly well, though, and that is the more common
+arrangement: keep the factual record everywhere and add Captain's Log only where
+you want the narration. `bootstrap.sh --no-captains-log` sets that up.
+
 ---
 
 ## How it works

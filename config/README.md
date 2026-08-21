@@ -28,6 +28,15 @@ when it is pointed at a script that is not there. If you want GSD, install it
 The `rtk` hook stays, because `bootstrap.sh` installs `rtk` and the command
 resolves. Drop that block if you skipped the CLI tools.
 
+### Captain's Log is optional
+
+The `enabledPlugins` block lists `captains-log` because this file describes a
+full setup, but it is the one entry to think about rather than copy. Dev Diary
+records the facts and belongs on every project; Captain's Log narrates sessions
+in the voice of Captain Picard and is worth having only where you want that.
+Drop the line, or run `bootstrap.sh --no-captains-log`, and the factual diary is
+unaffected.
+
 ### Merging, not overwriting
 
 Adding a plugin marketplace writes to `~/.claude/settings.json` under

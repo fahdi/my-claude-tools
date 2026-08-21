@@ -10,6 +10,7 @@
 #   ./scripts/bootstrap.sh --yes        # no prompts
 #   ./scripts/bootstrap.sh --dry-run    # print the plan, change nothing
 #   ./scripts/bootstrap.sh --skip-cli   # plugins and MCP only, no brew/uv
+#   ./scripts/bootstrap.sh --no-captains-log   # skip the Picard-voiced diary
 
 set -uo pipefail
 
@@ -21,13 +22,14 @@ warn()    { printf "${YELLOW}!${NC} %s\n" "$*"; }
 fail()    { printf "${RED}✗${NC} %s\n" "$*" >&2; }
 skip()    { printf "${DIM}·${NC} %s\n" "$*"; }
 
-DRY_RUN=0; ASSUME_YES=0; SKIP_CLI=0
+DRY_RUN=0; ASSUME_YES=0; SKIP_CLI=0; WITH_CAPTAINS_LOG=1
 for arg in "$@"; do
     case "$arg" in
         --dry-run)  DRY_RUN=1 ;;
         --yes|-y)   ASSUME_YES=1 ;;
         --skip-cli) SKIP_CLI=1 ;;
-        --help|-h)  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --no-captains-log) WITH_CAPTAINS_LOG=0 ;;
+        --help|-h)  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)          fail "Unknown option: $arg"; exit 2 ;;
     esac
 done
@@ -129,7 +131,6 @@ echo ""
 info "Plugins"
 PLUGINS=(
     # Built here
-    captains-log@my-claude-tools
     dev-diary@my-claude-tools
     claude-workflows@my-claude-tools
     # Third party
@@ -142,6 +143,16 @@ PLUGINS=(
     rust-analyzer-lsp@claude-plugins-official
     claude-mem@thedotmack
 )
+# Captain's Log is deliberately separate. Dev Diary is the record you keep on
+# every project; Captain's Log narrates sessions as Picard and earns its place
+# only where you actually want that. Opting out of the fun one should not cost
+# you the factual one, so it gets its own flag.
+if [ "$WITH_CAPTAINS_LOG" -eq 1 ]; then
+    PLUGINS+=(captains-log@my-claude-tools)
+else
+    skip "plugin: captains-log skipped (--no-captains-log)"
+fi
+
 for plugin in "${PLUGINS[@]}"; do
     run "plugin: $plugin" claude plugin install "$plugin"
 done
@@ -204,8 +215,16 @@ if [ "$DRY_RUN" -eq 1 ]; then
 elif [ "$FAILURES" -eq 0 ]; then
     echo "  Done. Restart Claude Code to pick up the new plugins."
     echo ""
-    echo "  The two diaries create themselves at ~/Code/captains-log and"
-    echo "  ~/Code/devdiary the first time a session does real work."
+    if [ "$WITH_CAPTAINS_LOG" -eq 1 ]; then
+        echo "  The two diaries create themselves at ~/Code/captains-log and"
+        echo "  ~/Code/devdiary the first time a session does real work."
+        echo ""
+        echo "  Captain's Log is the optional one: /plugin disable captains-log"
+        echo "  turns it off, and the same command with enable brings it back."
+    else
+        echo "  The diary creates itself at ~/Code/devdiary the first time a"
+        echo "  session does real work."
+    fi
 else
     echo "  Finished with $FAILURES failure(s) — see the ✗ lines above."
     echo "  Re-running is safe; it will retry only what did not land."

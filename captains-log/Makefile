@@ -1,6 +1,12 @@
-.PHONY: test test-python test-bats install-deps
+.PHONY: test validate test-python test-bats install-deps
 
-test: test-python test-bats
+test: validate test-python test-bats
+
+validate:
+	@echo "=== manifests ==="
+	claude plugin validate .. --strict
+	claude plugin validate . --strict
+	claude plugin validate ./commands --strict
 
 test-python:
 	@echo "=== pytest ==="

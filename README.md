@@ -9,6 +9,34 @@ sites) and the documentation explains why each piece exists, not just how to ins
 
 ---
 
+## Install the tools
+
+This repo is a Claude Code **plugin marketplace**. Point any Claude at it and the
+tools install themselves — no cloning, no scripts, no editing `settings.json`.
+
+From inside Claude Code:
+
+```
+/plugin marketplace add fahdi/my-claude-tools
+/plugin install captains-log@my-claude-tools
+```
+
+Or from a shell:
+
+```bash
+claude plugin marketplace add fahdi/my-claude-tools
+claude plugin install captains-log@my-claude-tools
+```
+
+| Plugin | Installs | What you get |
+|--------|----------|--------------|
+| `captains-log` | `/plugin install captains-log@my-claude-tools` | A `Stop` hook that narrates each session as Picard, plus the `/captains-log:log` command |
+
+Each plugin still ships its own `install.sh` for people who would rather wire it
+in by hand. Use one path or the other, not both — see the plugin's README.
+
+---
+
 ## Start here
 
 | Doc | What it covers |
@@ -47,6 +75,35 @@ for how the two fit together.
 
 ---
 
+## Repo layout
+
+```
+my-claude-tools/
+├── .claude-plugin/
+│   └── marketplace.json   # Marketplace manifest — lists every plugin here
+├── captains-log/          # Plugin: Picard-voiced session diary
+│   ├── .claude-plugin/plugin.json
+│   ├── commands/          # Slash commands
+│   ├── hooks/             # hooks.json + hook scripts
+│   ├── tests/             # pytest + bats
+│   └── install.sh         # Standalone install path
+├── config/                # Sanitized settings.json reference
+└── docs/                  # How I work, full stack inventory
+```
+
 ## Contributing
 
-PRs welcome. Each tool lives in its own directory with a `README.md` and `install.sh`.
+PRs welcome. Each tool is a self-contained Claude Code plugin:
+
+1. Create `<tool-name>/.claude-plugin/plugin.json` with `name`, `version`, and `description`.
+2. Put components in the conventional directories — `commands/`, `agents/`,
+   `skills/`, `hooks/hooks.json`. Reference your own files with
+   `${CLAUDE_PLUGIN_ROOT}`, never a hardcoded or `~`-relative path.
+3. Add an entry to `.claude-plugin/marketplace.json`.
+4. Add a `README.md` and, ideally, tests.
+5. Validate before opening the PR:
+
+```bash
+claude plugin validate . --strict              # marketplace manifest
+claude plugin validate ./<tool-name> --strict  # plugin manifest + hooks
+```

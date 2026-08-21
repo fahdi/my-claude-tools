@@ -1,0 +1,28 @@
+{
+  "name": "my-claude-tools",
+  "owner": {
+    "name": "Fahad Murtaza",
+    "email": "info@fahdmurtaza.com",
+    "url": "https://github.com/fahdi"
+  },
+  "metadata": {
+    "description": "Claude Code tools, hooks, and commands from fahdi's working setup.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "captains-log",
+      "source": "./captains-log",
+      "description": "Narrates every Claude Code session in the voice of Captain Jean-Luc Picard and commits it to a git-backed diary.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Fahad Murtaza",
+        "url": "https://github.com/fahdi"
+      },
+      "homepage": "https://github.com/fahdi/my-claude-tools/tree/main/captains-log",
+      "license": "MIT",
+      "keywords": ["hooks", "journaling", "logging", "stop-hook", "diary"],
+      "category": "productivity"
+    }
+  ]
+}

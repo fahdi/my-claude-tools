@@ -121,6 +121,11 @@ Both Stop hooks are lock-protected and skip sessions that did no real work. The
 Captain's Log hook also supports a per-project opt-out via a `.local-diary` marker
 file and reclaims stale locks left by timed-out runs.
 
+The `settings.json` above reflects the script install. Installing Captain's Log as
+a plugin instead registers the same `Stop` hook through
+`captains-log/hooks/hooks.json`, so it never appears in `settings.json` at all —
+which is why the sanitized config in `config/` still shows the explicit path.
+
 ## Skills
 
 Beyond plugin-bundled skills, `~/.claude/skills/` carries 59 standalone skills:
@@ -166,7 +171,9 @@ The lab venv is Python 3.13 via uv; run tools with `uv run` from
 
 ## Custom commands and statusline
 
-- **`/log`**: manual Captain's Log entry mid-session (the Stop hook covers exits)
+- **`/captains-log:log`**: manual Captain's Log entry mid-session (the Stop hook
+  covers exits). The script installer registers it as plain `/log` instead; the
+  plugin namespaces it.
 - **`statusline.sh`**: custom bash statusline with model, git state, and context
   usage in truecolor
 
@@ -188,10 +195,24 @@ npm install -g get-shit-done-cc     # GSD (see the deprecation note above)
 
 claude mcp add --scope user --transport http context7 https://mcp.context7.com/mcp
 claude plugin marketplace add thedotmack/claude-mem
+
+# Captain's Log, from this repo
+claude plugin marketplace add fahdi/my-claude-tools
+claude plugin install captains-log@my-claude-tools
 ```
 
-Then `cd captains-log && make test` should report 10 pytest and 10 bats tests
-passing before you run `./install.sh`.
+That is the whole Captain's Log install. The hook creates and git-initialises the
+diary at `~/Code/captains-log` the first time a session earns an entry, and adding
+a GitHub remote afterwards is optional:
+
+```bash
+gh repo create captains-log --private --source ~/Code/captains-log --remote=origin --push
+```
+
+If you would rather wire it in by hand, clone the repo and run `./install.sh`
+instead — but pick one path or the other, since running both leaves you with two
+`Stop` hooks writing to the same diary. Either way, `cd captains-log && make test`
+should report 10 pytest and 11 bats tests passing first.
 
 ### Two things worth knowing before you start
 
@@ -204,4 +225,5 @@ it.
 
 **`install.sh` is interactive.** It prompts for the diary location and offers
 to create a GitHub repo, so it needs a terminal. There is no unattended flag
-yet; run it by hand rather than from a setup script.
+yet; run it by hand rather than from a setup script. The plugin install has no
+interactive step, which is why the block above uses it.

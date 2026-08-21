@@ -1,0 +1,14 @@
+{
+  "name": "claude-workflows",
+  "version": "1.0.0",
+  "description": "Process skills that shape how a feature gets built. Currently ships software-factory, a four-gate workflow that forces every important decision before implementation code exists.",
+  "author": {
+    "name": "Fahad Murtaza",
+    "email": "info@fahdmurtaza.com",
+    "url": "https://github.com/fahdi"
+  },
+  "homepage": "https://github.com/fahdi/my-claude-tools/tree/main/claude-workflows",
+  "repository": "https://github.com/fahdi/my-claude-tools",
+  "license": "MIT",
+  "keywords": ["skills", "workflow", "planning", "process"]
+}

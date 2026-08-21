@@ -21,8 +21,54 @@
       },
       "homepage": "https://github.com/fahdi/my-claude-tools/tree/main/captains-log",
       "license": "MIT",
-      "keywords": ["hooks", "journaling", "logging", "stop-hook", "diary"],
+      "keywords": [
+        "hooks",
+        "journaling",
+        "logging",
+        "stop-hook",
+        "diary"
+      ],
       "category": "productivity"
+    },
+    {
+      "name": "dev-diary",
+      "source": "./dev-diary",
+      "description": "Records the factual counterpart to Captain's Log: prose lead, files changed, commands run, decisions, follow-ups. Files and commands are extracted mechanically from the transcript.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Fahad Murtaza",
+        "url": "https://github.com/fahdi"
+      },
+      "homepage": "https://github.com/fahdi/my-claude-tools/tree/main/dev-diary",
+      "license": "MIT",
+      "keywords": [
+        "hooks",
+        "journaling",
+        "logging",
+        "stop-hook",
+        "diary",
+        "audit"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "claude-workflows",
+      "source": "./claude-workflows",
+      "description": "Process skills that shape how a feature gets built, starting with software-factory's four approval gates.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Fahad Murtaza",
+        "url": "https://github.com/fahdi"
+      },
+      "homepage": "https://github.com/fahdi/my-claude-tools/tree/main/claude-workflows",
+      "license": "MIT",
+      "keywords": [
+        "skills",
+        "workflow",
+        "planning",
+        "process"
+      ],
+      "category": "workflow"
     }
   ]
 }

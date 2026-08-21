@@ -7,11 +7,10 @@ Two things in one repo:
 2. **A written account of my whole setup** — every plugin, skill, hook, MCP server
    and CLI tool I run, and why each one earns its place.
 
-The second is much larger than the first, and the two are not the same set. Most of
-what [docs/stack.md](./docs/stack.md) describes is installed from somewhere else or
-is specific to my machine; what actually ships here is the one plugin in the table
-below. That gap is deliberate, and marked everywhere it matters, so you always know
-whether a thing is installable or merely documented.
+Anything I built that belongs in a plugin is packaged as one. Anything that is a
+skill is packaged as a skill. Everything third-party is documented *and* installed
+for you by [`scripts/bootstrap.sh`](./scripts/bootstrap.sh), so a fresh machine
+reaches a known-good state in one command rather than a checklist.
 
 This is not a dotfiles dump. It is a working system that has shipped real projects
 (a crypto forecasting service, a transcription suite, WordPress plugins, marketing
@@ -24,6 +23,29 @@ sites) and the documentation explains why each piece exists, not just how to ins
 This repo is a Claude Code **plugin marketplace**. Point any Claude at it and the
 tools install themselves — no cloning, no scripts, no editing `settings.json`.
 
+### Everything at once
+
+```bash
+git clone https://github.com/fahdi/my-claude-tools
+cd my-claude-tools
+./scripts/bootstrap.sh
+```
+
+That adds the marketplaces, installs all three plugins here plus the eight
+third-party ones I run, registers the context7 MCP server, and installs the CLI
+tools they depend on. Every step is idempotent, so running it again on a
+half-configured machine finishes the job instead of starting over. `--dry-run`
+prints the plan without touching anything; `--skip-cli` leaves Homebrew alone;
+`--no-captains-log` skips the Picard diary.
+
+**Dev Diary is the one to keep everywhere; Captain's Log is the one you turn on
+where you want it.** The factual record earns its place on every project. The
+Picard narration earns its place on the projects you are enjoying. Either can be
+switched at any time with `/plugin disable captains-log` and `/plugin enable
+captains-log`, so the choice at install time is not binding.
+
+### Just the plugins from this repo
+
 From inside Claude Code:
 
 ```
@@ -31,19 +53,14 @@ From inside Claude Code:
 /plugin install captains-log@my-claude-tools
 ```
 
-Or from a shell:
+| Plugin | What you get |
+|--------|--------------|
+| [`captains-log`](./captains-log) | A `Stop` hook that narrates each session as Picard, plus the `/captains-log:log` command. Optional — see below |
+| [`dev-diary`](./dev-diary) | A `Stop` hook that records the facts: files changed and commands run, extracted mechanically from the transcript |
+| [`claude-workflows`](./claude-workflows) | The `software-factory` skill: four approval gates before implementation code exists |
 
-```bash
-claude plugin marketplace add fahdi/my-claude-tools
-claude plugin install captains-log@my-claude-tools
-```
-
-| Plugin | Installs | What you get |
-|--------|----------|--------------|
-| `captains-log` | `/plugin install captains-log@my-claude-tools` | A `Stop` hook that narrates each session as Picard, plus the `/captains-log:log` command |
-
-Each plugin still ships its own `install.sh` for people who would rather wire it
-in by hand. Use one path or the other, not both — see the plugin's README.
+Captain's Log also ships an `install.sh` for wiring it in by hand. Use one path
+or the other, not both — see its README.
 
 Works on macOS, Linux, WSL, and native Windows. Windows needs
 [Git for Windows](https://git-scm.com/downloads/win), which is also what lets
@@ -70,8 +87,6 @@ Claude Code use its own Bash tool — see [docs/windows.md](./docs/windows.md).
 
 ## Tools that ship here
 
-One, so far.
-
 ### [Captain's Log](./captains-log)
 
 Automatically narrates every Claude Code session in the voice of Captain Jean-Luc
@@ -84,37 +99,52 @@ entries via `/captains-log:log`. Comes with a full pytest + bats test suite.
 
 → [Setup guide](./captains-log/README.md)
 
+### [Dev Diary](./dev-diary)
+
+The factual counterpart. A prose lead, the files changed, the commands run, the
+decisions taken, and the follow-ups left behind.
+
+The split is the point: **files changed and commands run are extracted
+mechanically from the transcript**, never written by a model, so they cannot be
+hallucinated. Only the interpretive parts come from `claude -p`. When I need to
+know what actually happened on a date, this is the source of truth.
+
+The two are designed to run together as two `Stop` hooks in one session.
+Narrative for humans, facts for audits.
+
+→ [Setup guide](./dev-diary/README.md)
+
+### [Claude Workflows](./claude-workflows)
+
+Process skills. Currently one: `software-factory`, a four-gate feature workflow
+that forces every important decision before implementation code exists, when
+changing it still costs a sentence instead of a rewrite. The methodology is
+[Dex Horthy's](https://github.com/humanlayer) at HumanLayer; the skill file is a
+write-up of it for Claude Code.
+
+→ [Setup guide](./claude-workflows/README.md)
+
 ---
 
 ## Documented here, but not shipped here
 
-`docs/stack.md` inventories my full setup. Most of it is not in this repo, for one
-of three reasons: it belongs to somebody else, it is too entangled with my machine
-to be useful to you, or it has not been packaged yet. Nothing below is installable
-from this marketplace.
+These are somebody else's work, so this repo documents and installs them rather
+than vendoring them. `bootstrap.sh` handles all of it.
 
-| Thing | Where it actually is | Why it is not here |
-|-------|----------------------|--------------------|
-| **Dev Diary** | Source lives in my private diary repo at `~/Code/devdiary/scripts/` | Not packaged yet. This is the next thing on the list — see [Roadmap](#roadmap). |
-| **The skills library** (~59 skills: SEO, design, a11y, React) | `~/.claude/skills/` | A mix of third-party skills and client-specific work. Sources are listed in [docs/stack.md](./docs/stack.md#skills). |
-| **GSD lifecycle hooks** | `npm install -g get-shit-done-cc` | Someone else's project. |
-| **RTK** (shell-command token proxy) | `brew install rtk` | Someone else's project. |
-| **claude-mem, superpowers, and the other plugins** | Their own marketplaces | Install pointers are in [docs/stack.md](./docs/stack.md#plugins). |
-| **`statusline.sh`** | `~/.claude/statusline.sh` | Personal, and shown in [config/settings.example.json](./config/settings.example.json). |
+| Thing | Source | Installed by bootstrap |
+|-------|--------|------------------------|
+| **superpowers, plugin-dev, claude-code-setup, frontend-design, chrome-devtools-mcp, playwright, rust-analyzer-lsp** | `anthropics/claude-plugins-official` | Yes |
+| **claude-mem** | `thedotmack/claude-mem` | Yes |
+| **context7 MCP server** | `mcp.context7.com` | Yes |
+| **RTK** (shell-command token proxy) | `brew install rtk` | Yes, unless `--skip-cli` |
+| **bats-core, pytest** (test runners) | Homebrew / uv | Yes, unless `--skip-cli` |
+| **GSD** (`get-shit-done-cc`) | npm | No — see [docs/stack.md](./docs/stack.md#gsd-get-shit-done-archive) |
+| **`statusline.sh`** | Personal | No — write your own, or drop the `statusLine` block |
 
-**Dev Diary** is worth a word since it is referenced throughout the docs: it is the
-factual counterpart to Captain's Log, running as a second `Stop` hook in the same
-session. Prose lead, files changed, commands run, decisions, follow-ups — with the
-files and commands extracted mechanically from the transcript, so they are ground
-truth rather than LLM guesses. See
-[docs/how-i-work.md](./docs/how-i-work.md#the-record) for how the two fit together.
-
-## Roadmap
-
-- Package **Dev Diary** as a second plugin in this marketplace, with the same
-  cross-platform treatment Captain's Log got.
-- Extract whichever of my standalone skills are general enough to be useful to
-  someone who is not me, and ship them as a skills plugin.
+Not everything in [docs/stack.md](./docs/stack.md) is on any one machine. That
+document is an inventory of a working setup over time, including a large skills
+library that lives elsewhere; it marks what is current. This repo is the part you
+can install.
 
 ---
 
@@ -130,8 +160,18 @@ my-claude-tools/
 │   ├── hooks/             # hooks.json + hook scripts
 │   ├── tests/             # pytest + bats
 │   └── install.sh         # Standalone install path
-├── config/                # Sanitized settings.json reference
-└── docs/                  # How I work, full stack inventory, Windows setup
+├── dev-diary/             # Plugin: the factual session record
+│   ├── .claude-plugin/plugin.json
+│   ├── hooks/             # hooks.json + hook script + diary.py
+│   └── tests/             # pytest
+├── claude-workflows/      # Plugin: process skills
+│   ├── .claude-plugin/plugin.json
+│   └── skills/
+│       └── software-factory/SKILL.md
+├── scripts/
+│   └── bootstrap.sh       # One-command setup for everything, including 3rd party
+├── config/                # A settings.json you can actually copy
+└── docs/                  # How I work, stack inventory, Windows setup
 ```
 
 **Why is there no top-level `skills/`, `agents/`, or `hooks/` directory?** Because
@@ -141,8 +181,9 @@ at `captains-log/commands/` and `captains-log/hooks/`. `captains-log` happens to
 ship no skills and no agents, so those two directories simply do not exist yet. A
 plugin that needed them would add them under its own folder — never at the root.
 
-Likewise there is only one tool directory because only one tool is packaged. Adding
-a second means adding a sibling of `captains-log/`, built the same way.
+`claude-workflows/` is the counter-example that makes the rule concrete: it ships a
+skill and no hook, so it has `skills/` and no `hooks/`. `dev-diary/` is the reverse.
+Each plugin carries exactly the directories it needs.
 
 ## Contributing
 

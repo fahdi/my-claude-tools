@@ -1,0 +1,14 @@
+{
+  "name": "dev-diary",
+  "version": "1.0.0",
+  "description": "Records the factual counterpart to Captain's Log: a prose lead plus files changed, commands run, decisions and follow-ups. Files and commands are extracted mechanically from the transcript, so they cannot be hallucinated.",
+  "author": {
+    "name": "Fahad Murtaza",
+    "email": "info@fahdmurtaza.com",
+    "url": "https://github.com/fahdi"
+  },
+  "homepage": "https://github.com/fahdi/my-claude-tools/tree/main/dev-diary",
+  "repository": "https://github.com/fahdi/my-claude-tools",
+  "license": "MIT",
+  "keywords": ["hooks", "journaling", "logging", "stop-hook", "diary", "audit"]
+}

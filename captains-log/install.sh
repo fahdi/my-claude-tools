@@ -18,6 +18,29 @@ die()     { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
+# Same interpreter probe the hook uses: Windows has no reliable python3, and its
+# Store stub answers to the name without being a working interpreter.
+find_python() {
+    local candidate
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1 &&
+           "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    if command -v py >/dev/null 2>&1 && py -3 -c '' >/dev/null 2>&1; then
+        printf '%s' 'py -3'
+        return 0
+    fi
+    return 1
+}
+
+# Unquoted at use sites so "py -3" splits into command and flag.
+PYTHON="$(find_python)" || die "Python 3 is required but was not found. Install it from https://python.org and reopen your terminal."
+
+command -v git >/dev/null 2>&1 || die "git is required but was not found."
+
 # ── Diary location ────────────────────────────────────────────────────────────
 
 DIARY_DIR="${CAPTAINS_LOG_DIR:-$HOME/Code/captains-log}"
@@ -57,7 +80,7 @@ if [ ! -d "$DIARY_DIR/.git" ]; then
     git -C "$DIARY_DIR" init -b main
 
     TODAY=$(date +%Y-%m-%d)
-    STARDATE=$(python3 -c "
+    STARDATE=$($PYTHON -c "
 import datetime
 now = datetime.date.today()
 day = now.timetuple().tm_yday
@@ -152,14 +175,14 @@ else
         warn "A Captain's Log hook already exists in settings.json — skipping (edit manually if needed)"
     else
         # Inject Stop hook using Python — safer than sed for JSON
-        DIARY_DIR="$DIARY_DIR" CLAUDE_SETTINGS="$CLAUDE_SETTINGS" python3 - << 'PYEOF'
+        DIARY_DIR="$DIARY_DIR" CLAUDE_SETTINGS="$CLAUDE_SETTINGS" $PYTHON - << 'PYEOF'
 import json, os, sys
 
 settings_path = os.environ['CLAUDE_SETTINGS']
 diary_dir = os.environ['DIARY_DIR']
 hook_path = os.path.join(diary_dir, 'scripts', 'log-session.sh')
 
-with open(settings_path, 'r') as f:
+with open(settings_path, 'r', encoding='utf-8') as f:
     settings = json.load(f)
 
 stop_hook = {
@@ -183,7 +206,7 @@ already = any(
 if not already:
     stop_hooks.append(stop_hook)
 
-with open(settings_path, 'w') as f:
+with open(settings_path, 'w', encoding='utf-8') as f:
     json.dump(settings, f, indent=2)
     f.write('\n')
 PYEOF

@@ -123,3 +123,82 @@ build_input() {
             || { echo "install.sh never copies $helper, which log-session.sh runs"; return 1; }
     done
 }
+
+# ── Portability regressions ───────────────────────────────────────────────────
+# The three tests below each pin a bug that was invisible on macOS and only
+# showed up on Linux, WSL, or Git Bash under Windows.
+
+# `stat -f %m` is BSD syntax. Everywhere else it failed, the `|| echo 0`
+# fallback made the lock look ~1.7 billion seconds old, and the reclaim below
+# fired on every run — so the recursion guard was cleared each time instead of
+# only when genuinely stale.
+@test "a fresh lock is not reclaimed as stale" {
+    mkdir "$LOCK"
+    run bash "$SCRIPT" < /dev/null
+    [ "$status" -eq 0 ]
+    [ -d "$LOCK" ]
+    rmdir "$LOCK"
+}
+
+@test "a lock older than the timeout is reclaimed" {
+    mkdir "$LOCK"
+    # Backdate well past the 90s staleness threshold.
+    touch -t "$(date -v-10M +%Y%m%d%H%M 2>/dev/null || date -d '10 minutes ago' +%Y%m%d%H%M)" "$LOCK"
+    export PATH="$BATS_TEST_DIRNAME/mocks:$PATH"
+    run bash "$SCRIPT" <<< "$(build_input "$FIXTURE_DIR/real_session.jsonl")"
+    [ "$status" -eq 0 ]
+    # Reclaimed, taken, and then released by the run's own cleanup trap.
+    [ ! -d "$LOCK" ]
+}
+
+# LOG_FILE was assigned but never exported, so the heredoc that reads
+# os.environ['LOG_FILE'] always saw nothing and the supplemental-entry branch
+# could not fire. A second run within 15 minutes must consult the first entry.
+@test "a second run within the window reads the previous entry" {
+    export PATH="$BATS_TEST_DIRNAME/mocks:$PATH"
+    export MOCK_PROMPT_LOG="$DIARY_DIR/../prompt.txt"
+    local input today
+    input=$(build_input "$FIXTURE_DIR/real_session.jsonl")
+
+    bash "$SCRIPT" <<< "$input"
+    today=$(date +%Y-%m-%d)
+    grep -q "MOCK_LOG_ENTRY" "$DIARY_DIR/$today.md"
+    # First run has nothing to build on, so it asks for a full entry.
+    ! grep -q "PREVIOUS ENTRY" "$MOCK_PROMPT_LOG"
+
+    bash "$SCRIPT" <<< "$input"
+    # Second run inside the 15-minute window must see the first entry.
+    grep -q "PREVIOUS ENTRY" "$MOCK_PROMPT_LOG"
+    grep -q "MOCK_LOG_ENTRY" "$MOCK_PROMPT_LOG"
+}
+
+# Windows has no dependable `python3`: python.org ships python.exe plus the py
+# launcher, and the name python3 is often a Store stub that runs nothing.
+@test "resolves a genuinely working python 3 interpreter" {
+    local probe
+    probe=$(sed -n '/^find_python()/,/^}/p' "$SCRIPT")
+    [ -n "$probe" ]
+
+    run bash -c "$probe; find_python"
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+
+    run bash -c "$probe; \$(find_python) -c 'import sys; print(sys.version_info[0])'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "3" ]
+}
+
+# macOS answers `stat -f %m`, so the BSD-only mtime lookup looked fine on the
+# machine this hook was written on. Force the other arrangement to prove the
+# reclaim logic no longer depends on which stat is installed.
+@test "fresh lock survives when only GNU-style stat is available" {
+    export PATH="$BATS_TEST_DIRNAME/mocks/gnu-stat:$BATS_TEST_DIRNAME/mocks:$PATH"
+    run stat -f %m "$DIARY_DIR"
+    [ "$status" -ne 0 ]   # the mock is in front of the real stat
+
+    mkdir "$LOCK"
+    run bash "$SCRIPT" < /dev/null
+    [ "$status" -eq 0 ]
+    [ -d "$LOCK" ]
+    rmdir "$LOCK"
+}

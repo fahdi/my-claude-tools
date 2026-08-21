@@ -26,14 +26,52 @@ if [ "$DIARY_DIR" = "$DEFAULT_DIARY_DIR" ]; then
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Resolve a Python 3 interpreter. macOS and Linux have python3; Windows ships
+# python.exe plus the py launcher, and its "python3" is usually a Microsoft
+# Store stub that opens the Store and runs nothing. Probe by actually asking
+# each candidate for its version rather than trusting the name.
+find_python() {
+    local candidate
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1 &&
+           "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    if command -v py >/dev/null 2>&1 && py -3 -c '' >/dev/null 2>&1; then
+        printf '%s' 'py -3'
+        return 0
+    fi
+    return 1
+}
+
+# Deliberately unquoted at every use site: "py -3" has to word-split into a
+# command and its flag.
+PYTHON="$(find_python)" || exit 0
+
+# mtime in epoch seconds. GNU coreutils (Linux, WSL, Git Bash) uses -c %Y;
+# BSD/macOS uses -f %m. Prints nothing when neither works, so callers can tell
+# "could not read" apart from "epoch zero".
+file_mtime() {
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true
+}
+
 # Reclaim a stale lock: if a prior run was SIGKILLed (e.g. hit the hook's
 # timeout while `claude -p` was still generating), its EXIT trap never fired
 # and the lock dir was left behind, wedging every future run silently.
 # The hook has a 60s timeout, so any lock older than that is dead.
+# Only reclaim when the age is genuinely known to exceed the timeout. The
+# previous version defaulted an unreadable mtime to 0, which on any non-macOS
+# stat made LOCK_AGE ~1.7 billion seconds and so reclaimed the lock on every
+# single run, defeating the recursion guard it exists to provide.
 if [ -d "$GLOBAL_LOCK" ]; then
-    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$GLOBAL_LOCK" 2>/dev/null || echo 0) ))
-    if [ "$LOCK_AGE" -gt 90 ]; then
-        rmdir "$GLOBAL_LOCK" 2>/dev/null
+    LOCK_MTIME="$(file_mtime "$GLOBAL_LOCK")"
+    if [ -n "$LOCK_MTIME" ] && [ "$LOCK_MTIME" -gt 0 ] 2>/dev/null; then
+        LOCK_AGE=$(( $(date +%s) - LOCK_MTIME ))
+        if [ "$LOCK_AGE" -gt 90 ]; then
+            rmdir "$GLOBAL_LOCK" 2>/dev/null
+        fi
     fi
 fi
 
@@ -57,10 +95,10 @@ trap cleanup EXIT
 cat > "$INPUT_FILE"
 
 # Extract transcript path
-TRANSCRIPT_PATH=$(INPUT_FILE="$INPUT_FILE" python3 - << 'PYEOF'
+TRANSCRIPT_PATH=$(INPUT_FILE="$INPUT_FILE" $PYTHON - << 'PYEOF'
 import json, sys, os
 try:
-    with open(os.environ['INPUT_FILE']) as f:
+    with open(os.environ['INPUT_FILE'], encoding='utf-8') as f:
         d = json.load(f)
     print(d.get('transcript_path', ''))
 except Exception:
@@ -73,9 +111,9 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
 fi
 
 # Parse transcript via module — outputs: first line = tool count, rest = message snippets
-PARSE_OUTPUT=$(python3 "$SCRIPT_DIR/parse_transcript.py" "$TRANSCRIPT_PATH" 2>/dev/null)
+PARSE_OUTPUT=$($PYTHON "$SCRIPT_DIR/parse_transcript.py" "$TRANSCRIPT_PATH" 2>/dev/null)
 TOOL_COUNT=$(echo "$PARSE_OUTPUT" | head -1)
-CONVERSATION=$(echo "$PARSE_OUTPUT" | tail -n +2 | head -25 | python3 -c "import sys; print('\n'.join(sys.stdin.read().splitlines()[-25:]))")
+CONVERSATION=$(echo "$PARSE_OUTPUT" | tail -n +2 | head -25 | $PYTHON -c "import sys; print('\n'.join(sys.stdin.read().splitlines()[-25:]))")
 
 if [ "$TOOL_COUNT" = "0" ] || [ -z "$TOOL_COUNT" ] || [ "$TOOL_COUNT" -lt 2 ] 2>/dev/null; then
     exit 0
@@ -89,7 +127,7 @@ fi
 echo "$CONVERSATION" > "$CONV_FILE"
 
 # Calculate stardate: (year - 1966) * 1000 + (day_of_year / 366 * 1000)
-STARDATE=$(python3 -c "
+STARDATE=$($PYTHON -c "
 import datetime
 now = datetime.date.today()
 day = now.timetuple().tm_yday
@@ -131,14 +169,14 @@ fi
 # and only add what is genuinely new — like a mid-mission update, not a retelling.
 RECENT_ENTRY=""
 if [ -f "$LOG_FILE" ]; then
-    RECENT_ENTRY=$(python3 - << 'PYEOF'
+    RECENT_ENTRY=$(LOG_FILE="$LOG_FILE" $PYTHON - << 'PYEOF'
 import os, re, time
 
 log_file = os.environ.get('LOG_FILE', '')
 if not log_file or not os.path.exists(log_file):
     raise SystemExit
 
-with open(log_file, 'r') as f:
+with open(log_file, 'r', encoding='utf-8') as f:
     content = f.read()
 
 # Split on the --- separators to get individual entries
@@ -255,7 +293,7 @@ fi
 
 # Update README — insert link at top of Entries list if not already present
 if ! grep -qF "$TODAY" "$DIARY_DIR/README.md" 2>/dev/null; then
-    TODAY="$TODAY" STARDATE="$STARDATE" DIARY_DIR="$DIARY_DIR" python3 - << 'PYEOF'
+    TODAY="$TODAY" STARDATE="$STARDATE" DIARY_DIR="$DIARY_DIR" $PYTHON - << 'PYEOF'
 import os
 
 today = os.environ['TODAY']
@@ -263,7 +301,7 @@ stardate = os.environ['STARDATE']
 diary_dir = os.environ['DIARY_DIR']
 readme = os.path.join(diary_dir, 'README.md')
 
-with open(readme, 'r') as f:
+with open(readme, 'r', encoding='utf-8') as f:
     content = f.read()
 
 new_line = f'- [{today}]({today}.md) — Stardate {stardate}\n'
@@ -277,7 +315,7 @@ if marker in content:
 else:
     content += f'\n## Entries\n\n{new_line}'
 
-with open(readme, 'w') as f:
+with open(readme, 'w', encoding='utf-8') as f:
     f.write(content)
 PYEOF
 fi

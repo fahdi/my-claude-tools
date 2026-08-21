@@ -137,9 +137,21 @@ captains-log/
 ## Requirements
 
 - Claude Code ≥ 2.0
-- Python 3 (for transcript parsing)
-- `gh` CLI (optional, for diary repo creation)
-- `git` with a configured remote for your diary
+- `git`
+- Python 3 — `python3`, `python`, or the `py -3` launcher; the hook probes for
+  whichever is a real interpreter
+- `gh` CLI (optional, only to create the diary's GitHub repo)
+
+### Platforms
+
+macOS, Linux, WSL, and native Windows are all supported.
+
+On native Windows you need [Git for Windows](https://git-scm.com/downloads/win).
+Claude Code runs hook commands through Git Bash when it is present and falls
+back to PowerShell when it is not, and this hook is a bash script. Git for
+Windows is also what gives Claude Code its own Bash tool, so it is worth having
+regardless. [docs/windows.md](../docs/windows.md) walks through the whole setup,
+including the Microsoft Store `python3` stub that catches most people out.
 
 ---
 

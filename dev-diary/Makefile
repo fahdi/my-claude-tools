@@ -9,7 +9,7 @@ validate:
 
 test-python:
 	@echo "=== pytest ==="
-	~/.local/bin/pytest tests/test_diary.py -v
+	pytest tests/test_diary.py -v
 
 test-bats:
 	@echo "=== bats ==="

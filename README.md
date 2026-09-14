@@ -171,6 +171,28 @@ inside Claude Code.
 → [Setup guide](./brew-upgrade/README.md)
 
 
+### [disk-cleanup](./disk-cleanup)
+
+A launchd agent that reclaims disk space every two hours, and does nothing at
+all until space is actually scarce.
+
+```
+2026-09-14 08:00 | OK  67GB free, threshold 40GB, nothing to do
+```
+
+The guard is the design. These caches exist because re-downloading their
+contents is slow, so pruning them on a healthy disk costs bandwidth and build
+time and buys nothing. Below the threshold it prunes uv, pnpm, npm, Homebrew and
+unavailable iOS simulators, each with that tool's own prune command rather than
+`rm -rf`: `~/Library/pnpm/store` and `~/.cache/uv` are content-addressable
+stores that projects hard-link into, so deleting them outright breaks existing
+checkouts instead of freeing space. Nothing it touches is user data.
+
+Not a plugin, for the same reason as the two above.
+
+→ [Setup guide](./disk-cleanup/README.md)
+
+
 ## Documented here, but not shipped here
 
 These are somebody else's work, so this repo documents and installs them rather
@@ -221,6 +243,10 @@ my-claude-tools/
 │   ├── bin/               # brew-upgrade.sh
 │   ├── tests/             # bats: the script, and the installer
 │   └── install.sh         # Installs the launchd agent (or a crontab entry)
+├── disk-cleanup/          # Tool: threshold-guarded cache pruning
+│   ├── bin/               # disk-cleanup.sh
+│   ├── tests/             # bats: the script, and the installer
+│   └── install.sh         # Installs the launchd agent
 ├── scripts/
 │   └── bootstrap.sh       # One-command setup for everything, including 3rd party
 ├── config/                # A settings.json you can actually copy
@@ -241,9 +267,9 @@ Each plugin carries exactly the directories it needs.
 ## Contributing
 
 PRs welcome. Most tools here are self-contained Claude Code plugins. Two are not:
-`statusline/` and `brew-upgrade/` ship no hooks, commands or skills and never run
-inside Claude Code, so they stay plain directories with their own `install.sh` and
-stay out of `marketplace.json`. Package a new tool as a plugin when it has
+`statusline/`, `brew-upgrade/` and `disk-cleanup/` ship no hooks, commands or
+skills and never run inside Claude Code, so they stay plain directories with
+their own `install.sh` and stay out of `marketplace.json`. Package a new tool as a plugin when it has
 components Claude Code can discover, and as a plain directory when it does not.
 
 For a plugin:

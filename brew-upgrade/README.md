@@ -28,15 +28,28 @@ Those stay a manual `brew upgrade --cask` when you are at the keyboard.
 
 ```bash
 cd brew-upgrade
-./install.sh                          # daily at 04:00
-./install.sh --schedule '0 4 * * 0'   # or weekly, Sunday 04:00
-./install.sh --uninstall
+./install.sh                 # launchd agent, daily at 04:00
+./install.sh --at 23:30      # a different hour
+./install.sh --cron          # crontab entry instead
+./install.sh --uninstall     # removes whichever is installed
 ```
 
-The crontab entry points at `bin/brew-upgrade.sh` inside this checkout, so a
-`git pull` updates the job with no reinstall. The entry is tagged with a marker
-comment, which is how the installer stays idempotent and how `--uninstall`
-finds it. Your other crontab lines are left untouched.
+The job points at `bin/brew-upgrade.sh` inside this checkout, so a `git pull`
+updates it with no reinstall.
+
+### Why launchd and not cron
+
+**cron never runs a job whose fire time passed while the machine was asleep, and
+never catches up.** On a laptop that sleeps overnight, a 04:00 crontab entry can
+go months without running, and it fails silently: no log line, no notification,
+nothing to notice. launchd runs a missed `StartCalendarInterval` job once on the
+next wake, which is the behaviour a daily maintenance job needs.
+
+`--cron` is still there for a machine that is always awake, or if you would
+rather keep every scheduled job in one crontab. Installing either mode removes
+the other, so you cannot end up running both. The crontab entry carries a marker
+comment, which is how the installer stays idempotent and how `--uninstall` finds
+it; your other crontab lines are never touched.
 
 ## Before you pick an hour
 
@@ -54,11 +67,20 @@ default for that reason.
 
 ```bash
 make dry-run   # print the steps, change nothing
+make status    # is the agent loaded?
 make log       # tail the last 50 lines
-make test      # bats suite
+make test      # bats suites
 make lint      # shellcheck
-crontab -l | grep brew-upgrade
 ```
+
+To force a run rather than waiting for 04:00:
+
+```bash
+launchctl kickstart -p gui/$(id -u)/com.my-claude-tools.brew-upgrade
+```
+
+`launchctl list | grep brew-upgrade` prints the agent's last exit status in the
+second column. `0` means the last run succeeded.
 
 A run appends a block like:
 
@@ -101,11 +123,14 @@ script at a fake brew:
 
 Two details cost me time and are worth stating plainly:
 
-1. **cron gives you almost no `PATH`.** brew shells out to git and curl, so the
-   script rebuilds a usable `PATH` before doing anything. A job that works in
-   your terminal and fails under cron is usually this.
+1. **cron and launchd both give you almost no `PATH`.** brew shells out to git
+   and curl, so the script rebuilds a usable `PATH` before doing anything. A job
+   that works in your terminal and fails when scheduled is usually this.
 2. **`$?` after `if cmd; then ... fi` is 0, not the command's status.** An `if`
    whose condition fails and which has no `else` exits 0. The first cut of this
    script read `$?` there, logged every failure as "exit 0" and reported
    "all steps succeeded" while a step had failed. `tests/test_brew_upgrade.bats`
    pins that behaviour so it cannot come back.
+3. **A scheduled job you never watched run is a guess.** This one was verified
+   end to end before being trusted: forced through `launchctl kickstart`, with
+   the log and the agent's exit status checked afterwards.

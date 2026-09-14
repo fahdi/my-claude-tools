@@ -151,14 +151,19 @@ A nightly cron job that keeps Homebrew formulae current, logs every run, and
 raises a notification only when something fails.
 
 ```
-0 4 * * * .../brew-upgrade/bin/brew-upgrade.sh   # update, upgrade, cleanup
+launchd agent, daily at 04:00   # brew update, brew upgrade, brew cleanup
 ```
 
 Casks are deliberately excluded: upgrading one can force-quit a running GUI app,
-and some need a sudo password cron cannot supply. Every step runs even if an
-earlier one failed, so a single broken formula does not block cleanup, and the
-exit status is 0 only when all of them succeeded. The crontab entry points at
-this checkout, so a `git pull` updates the job with no reinstall.
+and some need a sudo password a scheduled job cannot supply. Every step runs even
+if an earlier one failed, so a single broken formula does not block cleanup, and
+the exit status is 0 only when all of them succeeded. The agent points at this
+checkout, so a `git pull` updates the job with no reinstall.
+
+It is a launchd agent rather than a crontab entry because cron never runs a job
+whose time passed while the Mac was asleep and never catches up, which on a
+laptop means a 04:00 entry can go months without firing and fail silently.
+`--cron` is still available for machines that stay awake.
 
 Not a plugin: it ships no hooks, commands or skills, and nothing about it runs
 inside Claude Code.
@@ -212,10 +217,10 @@ my-claude-tools/
 │   ├── config/            # tools.conf: what tool-status probes
 │   ├── tests/             # bats
 │   └── install.sh         # Symlinks ~/.claude/statusline.sh here
-├── brew-upgrade/          # Tool: nightly Homebrew cron
+├── brew-upgrade/          # Tool: nightly Homebrew maintenance
 │   ├── bin/               # brew-upgrade.sh
-│   ├── tests/             # bats
-│   └── install.sh         # Installs the crontab entry
+│   ├── tests/             # bats: the script, and the installer
+│   └── install.sh         # Installs the launchd agent (or a crontab entry)
 ├── scripts/
 │   └── bootstrap.sh       # One-command setup for everything, including 3rd party
 ├── config/                # A settings.json you can actually copy

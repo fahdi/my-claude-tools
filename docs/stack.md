@@ -88,6 +88,30 @@ rtk discover          # scan Claude Code history for missed opportunities
 rtk proxy <cmd>       # raw passthrough for debugging
 ```
 
+## GitHub CLI (gh) [current]
+
+Homebrew, `gh 2.97.0`. The harness reaches for it constantly: PRs, issues,
+releases, and anything on the GitHub API that a plain `git` cannot do. Claude
+Code's own guidance is to use `gh` rather than hand-rolled API calls, so it is a
+hard dependency of the delivery loop rather than a convenience.
+
+```bash
+gh pr create --fill        # ship a slice
+gh pr list --state open
+gh issue create
+gh api repos/:owner/:repo/releases
+gh auth status --active    # the check that matters
+```
+
+Authenticated against github.com as `fahdi`, token in the macOS keyring, git
+operations over ssh, scopes `repo`, `gist`, `project`, `write:org`,
+`admin:public_key`.
+
+That last command is why `gh` is probed with a health check rather than a plain
+PATH lookup in [../statusline](../statusline): a `gh` that is installed but
+logged out, or whose token has expired, fails every command in the loop while
+looking perfectly installed. The statusline shows it as `⚠`, not `✔`.
+
 ## MCP servers [current]
 
 Global servers (in `~/.claude.json`):
@@ -194,8 +218,15 @@ The lab venv is Python 3.13 via uv; run tools with `uv run` from
 - **`/captains-log:log`**: manual Captain's Log entry mid-session (the Stop hook
   covers exits). The script installer registers it as plain `/log` instead; the
   plugin namespaces it.
-- **`statusline.sh`**: custom bash statusline with model, git state, and context
-  usage in truecolor
+- **`statusline.sh`**: custom bash statusline with model, git state, context
+  usage, session length, effort and rate-limit bars in truecolor. Now owned by
+  this repo at [../statusline](../statusline); `~/.claude/statusline.sh` is a
+  symlink into it
+- **tool-status**: the statusline's third block, reporting whether every tool
+  above is installed *and* correctly wired. Probes hooks, plugins, MCP servers,
+  slash-command suites and CLI binaries, with an optional health command per
+  tool. Profile-aware, because `~/.claude` and `~/.claude-personal` hold
+  different halves of this setup. `tool-status.sh --full` prints every path
 
 ## Model
 

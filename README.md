@@ -124,7 +124,47 @@ write-up of it for Claude Code.
 
 → [Setup guide](./claude-workflows/README.md)
 
+### [Statusline](./statusline)
+
+My statusline, owned by this repo, with a segment that reports whether every tool
+in the setup is actually installed and correctly wired.
+
+```
+🔧 log ✔  diary ✔  rtk ✔0.45  gh ✔2.97  gsd ⚠  mem ✔
+   8 plugins · 59 skills · 37 agents · 5 mcp
+```
+
+Green means found *and* wired; yellow means inconsistent (a `Stop` hook pointing
+at a deleted script, a plugin on disk but disabled, a `gh` on `PATH` but logged
+out); red means gone. `tool-status.sh --full` prints every absolute path.
+Profile-aware, since `~/.claude` and `~/.claude-personal` hold different halves
+of the setup. `~/.claude/statusline.sh` becomes a symlink into the repo, so edits
+here are live in the next session.
+
+→ [Setup guide](./statusline/README.md)
+
 ---
+
+### [brew-upgrade](./brew-upgrade)
+
+A nightly cron job that keeps Homebrew formulae current, logs every run, and
+raises a notification only when something fails.
+
+```
+0 4 * * * .../brew-upgrade/bin/brew-upgrade.sh   # update, upgrade, cleanup
+```
+
+Casks are deliberately excluded: upgrading one can force-quit a running GUI app,
+and some need a sudo password cron cannot supply. Every step runs even if an
+earlier one failed, so a single broken formula does not block cleanup, and the
+exit status is 0 only when all of them succeeded. The crontab entry points at
+this checkout, so a `git pull` updates the job with no reinstall.
+
+Not a plugin: it ships no hooks, commands or skills, and nothing about it runs
+inside Claude Code.
+
+→ [Setup guide](./brew-upgrade/README.md)
+
 
 ## Documented here, but not shipped here
 
@@ -139,7 +179,6 @@ than vendoring them. `bootstrap.sh` handles all of it.
 | **RTK** (shell-command token proxy) | `brew install rtk` | Yes, unless `--skip-cli` |
 | **bats-core, pytest** (test runners) | Homebrew / uv | Yes, unless `--skip-cli` |
 | **GSD** (`get-shit-done-cc`) | npm | No — see [docs/stack.md](./docs/stack.md#gsd-get-shit-done-archive) |
-| **`statusline.sh`** | Personal | No — write your own, or drop the `statusLine` block |
 
 Not everything in [docs/stack.md](./docs/stack.md) is on any one machine. That
 document is an inventory of a working setup over time, including a large skills
@@ -168,6 +207,15 @@ my-claude-tools/
 │   ├── .claude-plugin/plugin.json
 │   └── skills/
 │       └── software-factory/SKILL.md
+├── statusline/            # Tool: the statusline and its tool-status segment
+│   ├── bin/               # statusline.sh + tool-status.sh
+│   ├── config/            # tools.conf: what tool-status probes
+│   ├── tests/             # bats
+│   └── install.sh         # Symlinks ~/.claude/statusline.sh here
+├── brew-upgrade/          # Tool: nightly Homebrew cron
+│   ├── bin/               # brew-upgrade.sh
+│   ├── tests/             # bats
+│   └── install.sh         # Installs the crontab entry
 ├── scripts/
 │   └── bootstrap.sh       # One-command setup for everything, including 3rd party
 ├── config/                # A settings.json you can actually copy
@@ -187,7 +235,13 @@ Each plugin carries exactly the directories it needs.
 
 ## Contributing
 
-PRs welcome. Each tool is a self-contained Claude Code plugin:
+PRs welcome. Most tools here are self-contained Claude Code plugins. Two are not:
+`statusline/` and `brew-upgrade/` ship no hooks, commands or skills and never run
+inside Claude Code, so they stay plain directories with their own `install.sh` and
+stay out of `marketplace.json`. Package a new tool as a plugin when it has
+components Claude Code can discover, and as a plain directory when it does not.
+
+For a plugin:
 
 1. Create `<tool-name>/.claude-plugin/plugin.json` with `name`, `version`, and `description`.
 2. Put components in the conventional directories — `commands/`, `agents/`,

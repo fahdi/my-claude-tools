@@ -30,6 +30,15 @@ PNPM_BIN="${DISK_CLEANUP_PNPM:-$(command -v pnpm || true)}"
 NPM_BIN="${DISK_CLEANUP_NPM:-$(command -v npm || true)}"
 BREW_BIN="${DISK_CLEANUP_BREW:-$(command -v brew || true)}"
 XCRUN_BIN="${DISK_CLEANUP_XCRUN:-$(command -v xcrun || true)}"
+CARGO_BIN="${DISK_CLEANUP_CARGO:-$(command -v cargo || true)}"
+
+# Rust build output is the one target that is both enormous and invisible: a
+# service with 500KB of source routinely carries 25GB of target/. It is fully
+# regenerable, but rebuilding is not free, so only directories left untouched
+# for this many days are cleaned. An active project is never disturbed.
+TARGET_MAX_AGE_DAYS="${DISK_CLEANUP_TARGET_MAX_AGE_DAYS:-30}"
+read -r -a CARGO_ROOTS <<< "${DISK_CLEANUP_CARGO_ROOTS:-$HOME/Code $HOME/websites}"
+CARGO_DEPTH="${DISK_CLEANUP_CARGO_DEPTH:-7}"
 
 DRY_RUN=0
 FORCE=0
@@ -48,6 +57,9 @@ Environment:
   DISK_CLEANUP_MIN_FREE_GB   Threshold in GB.
   DISK_CLEANUP_VOLUME        Volume to measure (default /System/Volumes/Data).
   DISK_CLEANUP_NOTIFIER      osascript-compatible binary for failure alerts.
+  DISK_CLEANUP_CARGO_ROOTS   Where to look for Rust projects.
+  DISK_CLEANUP_TARGET_MAX_AGE_DAYS
+                             Only clean target/ dirs idle this long (default 30).
 
 Exit status is 0 when every attempted step succeeded, 1 otherwise.
 USAGE
@@ -118,6 +130,63 @@ prune_step() {
     return "$rc"
 }
 
+# Prints the manifest path of every Rust project whose target/ has gone stale.
+stale_cargo_manifests() {
+    local roots=() r d manifest
+    for r in "${CARGO_ROOTS[@]}"; do
+        [ -d "$r" ] && roots+=("$r")
+    done
+    [ "${#roots[@]}" -eq 0 ] && return 0
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        manifest="$(dirname "$d")/Cargo.toml"
+        [ -f "$manifest" ] && printf '%s\n' "$manifest"
+    done < <(find "${roots[@]}" -maxdepth "$CARGO_DEPTH" -type d -name target -prune -mtime "+${TARGET_MAX_AGE_DAYS}" 2>/dev/null)
+}
+
+# Cleans Rust build directories that nothing has touched recently. Uses cargo's
+# own clean rather than rm -rf, so a directory that merely looks like a target/
+# but has no manifest beside it is left alone.
+prune_cargo_targets() {
+    local label="cargo targets"
+    if [ -z "$CARGO_BIN" ] || { [ ! -x "$CARGO_BIN" ] && ! command -v "$CARGO_BIN" >/dev/null 2>&1; }; then
+        log "SKIP  ${label} (cargo not installed)"
+        return 0
+    fi
+
+    local roots=()
+    local r
+    for r in "${CARGO_ROOTS[@]}"; do
+        [ -d "$r" ] && roots+=("$r")
+    done
+    if [ "${#roots[@]}" -eq 0 ]; then
+        log "SKIP  ${label} (no source roots present)"
+        return 0
+    fi
+
+    local rc=0 found=0 manifest
+    while IFS= read -r manifest; do
+        [ -n "$manifest" ] || continue
+        found=$(( found + 1 ))
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "WOULD ${label}: cargo clean --manifest-path ${manifest}"
+            continue
+        fi
+        log "START ${label}: ${manifest}"
+        if "$CARGO_BIN" clean --manifest-path "$manifest" >> "$LOG" 2>&1; then
+            log "OK    ${label}: ${manifest}"
+        else
+            rc=1
+            log "FAIL  ${label}: ${manifest}"
+        fi
+    done < <(stale_cargo_manifests)
+
+    if [ "$found" -eq 0 ]; then
+        log "OK    ${label} (nothing idle for ${TARGET_MAX_AGE_DAYS}+ days)"
+    fi
+    return "$rc"
+}
+
 before="$(free_gb)"
 if [ -z "$before" ]; then
     log "ABORT could not read free space on ${VOLUME}"
@@ -133,6 +202,15 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "would do nothing: above threshold"
     else
         echo "would prune: uv, pnpm, npm, brew, unavailable simulators"
+        echo
+        echo "Rust target/ dirs idle ${TARGET_MAX_AGE_DAYS}+ days:"
+        n=0
+        while IFS= read -r m; do
+            [ -n "$m" ] || continue
+            n=$(( n + 1 ))
+            printf '  %6s  %s\n' "$(du -sh "$(dirname "$m")/target" 2>/dev/null | cut -f1)" "$(dirname "$m")"
+        done < <(stale_cargo_manifests)
+        [ "$n" -eq 0 ] && echo "  (none)"
     fi
     exit 0
 fi
@@ -157,6 +235,7 @@ prune_step "pnpm store"     "$PNPM_BIN"  store prune                  || failed=
 prune_step "npm cache"      "$NPM_BIN"   cache clean --force          || failed="${failed} npm"
 prune_step "brew cleanup"   "$BREW_BIN"  cleanup --prune=all          || failed="${failed} brew"
 prune_step "stale sims"     "$XCRUN_BIN" simctl delete unavailable    || failed="${failed} simulators"
+prune_cargo_targets                                                     || failed="${failed} cargo"
 
 after="$(free_gb)"
 reclaimed=$(( after - before ))

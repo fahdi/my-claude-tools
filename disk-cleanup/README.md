@@ -22,6 +22,7 @@ do. A quiet log is evidence the job is running, not evidence it is broken.
 | npm cache | `npm cache clean --force` | Fully regenerable |
 | Homebrew | `brew cleanup --prune=all` | Old versions and downloads |
 | iOS simulators | `xcrun simctl delete unavailable` | Simulators for SDKs you no longer have |
+| Rust builds | `cargo clean` | Only for projects idle 30+ days |
 
 **Every target uses its own tool's prune command, never `rm -rf`.** That
 distinction is not stylistic. `~/Library/pnpm/store` is a content-addressable
@@ -30,8 +31,31 @@ works the same way, so deleting either directory outright breaks existing
 checkouts instead of safely freeing space. `prune` removes only what nothing
 references.
 
+### Rust build output is usually the real problem
+
+`target/` is both enormous and invisible. On the machine this was written for,
+fifteen Rust projects held **119GB** of build output between them, and not one
+had been touched in over a month. A single service carried 25GB of `target/`
+against 524KB of source. Meanwhile every package cache above added up to about
+23GB, so a cleaner that skipped Rust was guarding the wrong fifth of the problem.
+
+It is fully regenerable, but rebuilding is not free, so only directories left
+untouched for `DISK_CLEANUP_TARGET_MAX_AGE_DAYS` (30 by default) are cleaned. A
+project you are actively building is never disturbed. A directory called
+`target/` with no `Cargo.toml` beside it is ignored, because it is not a Rust
+build directory.
+
+`--dry-run` lists every project it would clean, with sizes, before anything is
+deleted:
+
+```
+Rust target/ dirs idle 30+ days:
+     25G  /Users/you/Code/example.com/notifications
+     18G  /Users/you/Code/example.com/messages-chat
+```
+
 **Nothing here touches user data.** No Downloads, no Trash, no Documents, no
-project directories. If you want those cleaned, do it by hand, where you can see
+source files. If you want those cleaned, do it by hand, where you can see
 what is going.
 
 A target whose tool is not installed is skipped rather than failed, and a
@@ -88,7 +112,10 @@ A run that acted logs each step and the net result:
 | `DISK_CLEANUP_LOG` | `~/Library/Logs/disk-cleanup.log` | Log file |
 | `DISK_CLEANUP_NOTIFIER` | `/usr/bin/osascript` | Failure alerts |
 | `DISK_CLEANUP_DF` | `df` | How free space is read |
-| `DISK_CLEANUP_UV` / `_PNPM` / `_NPM` / `_BREW` / `_XCRUN` | from `PATH` | Tool locations |
+| `DISK_CLEANUP_TARGET_MAX_AGE_DAYS` | `30` | Only clean `target/` idle this long |
+| `DISK_CLEANUP_CARGO_ROOTS` | `~/Code ~/websites` | Where to look for Rust projects |
+| `DISK_CLEANUP_CARGO_DEPTH` | `7` | How deep to search for them |
+| `DISK_CLEANUP_UV` / `_PNPM` / `_NPM` / `_BREW` / `_XCRUN` / `_CARGO` | from `PATH` | Tool locations |
 
 The installer bakes `DISK_CLEANUP_MIN_FREE_GB` into the agent's environment, so
 changing the threshold means reinstalling rather than editing the plist.

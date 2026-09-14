@@ -42,9 +42,32 @@ exit 0
 EOS
         chmod +x "$TMP/$t"
     done
+    cat > "$TMP/cargo" <<EOS
+#!/usr/bin/env bash
+echo "cargo \$@" >> "$CALLS"
+exit 0
+EOS
+    chmod +x "$TMP/cargo"
+
     export DISK_CLEANUP_UV="$TMP/uv" DISK_CLEANUP_PNPM="$TMP/pnpm" \
            DISK_CLEANUP_NPM="$TMP/npm" DISK_CLEANUP_BREW="$TMP/brew" \
-           DISK_CLEANUP_XCRUN="$TMP/xcrun"
+           DISK_CLEANUP_XCRUN="$TMP/xcrun" DISK_CLEANUP_CARGO="$TMP/cargo"
+
+    ROOT="$TMP/src"
+    mkdir -p "$ROOT"
+    export DISK_CLEANUP_CARGO_ROOTS="$ROOT"
+}
+
+# Builds a Rust project at $1 whose target/ was last touched $2 ("old"|"new").
+make_rust_project() {
+    local name="$1" age="$2"
+    mkdir -p "$ROOT/$name/target"
+    touch "$ROOT/$name/Cargo.toml"
+    if [ "$age" = "old" ]; then
+        touch -t 202001010000 "$ROOT/$name/target"
+    else
+        touch "$ROOT/$name/target"
+    fi
 }
 
 set_free()      { echo "$1" > "$FREEFILE"; }
@@ -209,4 +232,98 @@ EOS
     head -c 500 /dev/zero | tr '\0' 'x' > "$DISK_CLEANUP_LOG"
     run "$TOOL"
     [ -f "${DISK_CLEANUP_LOG}.1" ]
+}
+
+@test "cleans a Rust target that has gone stale" {
+    set_free 10
+    make_rust_project idle old
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/idle/Cargo.toml"* ]]
+}
+
+@test "leaves an actively built target alone" {
+    set_free 10
+    make_rust_project active new
+    run "$TOOL"
+    [[ "$(calls)" != *"cargo clean"* ]]
+    grep -q "nothing idle for 30+ days" "$DISK_CLEANUP_LOG"
+}
+
+@test "cleans only the stale project when both exist" {
+    set_free 10
+    make_rust_project idle old
+    make_rust_project active new
+    run "$TOOL"
+    [[ "$(calls)" == *"$ROOT/idle/Cargo.toml"* ]]
+    [[ "$(calls)" != *"$ROOT/active/Cargo.toml"* ]]
+}
+
+@test "a target directory with no Cargo.toml beside it is ignored" {
+    set_free 10
+    mkdir -p "$ROOT/not-rust/target"
+    touch -t 202001010000 "$ROOT/not-rust/target"
+    run "$TOOL"
+    [[ "$(calls)" != *"not-rust"* ]]
+}
+
+@test "the age threshold is configurable in both directions" {
+    set_free 10
+    mkdir -p "$ROOT/fivedays/target"
+    touch "$ROOT/fivedays/Cargo.toml"
+    touch -t "$(date -v-5d '+%Y%m%d%H%M')" "$ROOT/fivedays/target"
+
+    # A 5-day-old target is stale under a 3-day threshold.
+    DISK_CLEANUP_TARGET_MAX_AGE_DAYS=3 run "$TOOL"
+    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/fivedays/Cargo.toml"* ]]
+
+    # ...and still fresh under a 10-day one.
+    : > "$CALLS"
+    DISK_CLEANUP_TARGET_MAX_AGE_DAYS=10 run "$TOOL"
+    [[ "$(calls)" != *"cargo clean"* ]]
+}
+
+@test "missing cargo is skipped, not failed" {
+    set_free 10
+    make_rust_project idle old
+    export DISK_CLEANUP_CARGO="$TMP/no-cargo-here"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "SKIP  cargo targets (cargo not installed)" "$DISK_CLEANUP_LOG"
+}
+
+@test "a source root that does not exist is skipped" {
+    set_free 10
+    export DISK_CLEANUP_CARGO_ROOTS="$TMP/nowhere"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "SKIP  cargo targets (no source roots present)" "$DISK_CLEANUP_LOG"
+}
+
+@test "a failing cargo clean is reported and notified" {
+    set_free 10
+    make_rust_project idle old
+    cat > "$TMP/cargo" <<EOS
+#!/usr/bin/env bash
+echo "cargo \$@" >> "$CALLS"
+exit 4
+EOS
+    chmod +x "$TMP/cargo"
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    [[ "$(notifications)" == *"cargo"* ]]
+}
+
+@test "--dry-run does not clean a stale target" {
+    set_free 10
+    make_rust_project idle old
+    run "$TOOL" --dry-run
+    [ -z "$(calls)" ]
+}
+
+@test "cargo targets are untouched above the threshold" {
+    set_free 100
+    make_rust_project idle old
+    run "$TOOL"
+    [ -z "$(calls)" ]
 }

@@ -130,5 +130,5 @@ info "Plist: $PLIST"
 info "Script: $SOURCE"
 info "Log:    \$HOME/Library/Logs/disk-cleanup.log"
 echo
-info "It prunes uv, pnpm, npm, brew and unavailable simulators, each with that"
-info "tool's own prune command. It never touches Downloads, Trash or projects."
+info "It prunes package caches, idle Rust and Flutter builds, DerivedData and"
+info "Docker build cache, and alerts if space stays low. It never touches user data."

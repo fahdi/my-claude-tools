@@ -140,6 +140,12 @@ What was actually using the space, and what was done with it by hand:
 | 6GB | Docker build cache and unused images | Pruned automatically |
 | 4.5GB | iOS simulators | Reported (`xcrun simctl erase all` by hand) |
 
+## Not yet automated
+
+[CANDIDATES.md](CANDIDATES.md) is the backlog of remaining space, measured after
+the incident: what each area is, what removing it costs, and whether it suits the
+scheduled job, the report-only list, or a manual cleanup.
+
 ## Testing note: bash 3.2
 
 `bats` runs under `/usr/bin/env bash`, which on macOS is bash 3.2. On bash

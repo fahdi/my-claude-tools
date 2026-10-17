@@ -20,7 +20,8 @@ brew cleanup --prune=all
 Each step runs even if an earlier one failed, so one broken formula does not
 block cleanup. The exit status is 0 only when every step succeeded.
 
-**Casks are deliberately excluded.** Upgrading a cask can force-quit a running
+**Casks are deliberately excluded**, which is why the step is
+`brew upgrade --formula`: a plain `brew upgrade` upgrades casks too. Upgrading a cask can force-quit a running
 GUI app, and some casks prompt for a sudo password that cron cannot supply.
 Those stay a manual `brew upgrade --cask` when you are at the keyboard.
 
@@ -30,6 +31,7 @@ Those stay a manual `brew upgrade --cask` when you are at the keyboard.
 cd brew-upgrade
 ./install.sh                 # launchd agent, daily at 04:00
 ./install.sh --at 23:30      # a different hour
+./install.sh --at 04:00,10:00,16:00,22:00   # several runs a day
 ./install.sh --cron          # crontab entry instead
 ./install.sh --uninstall     # removes whichever is installed
 ```
@@ -61,7 +63,8 @@ brew services list
 
 If `postgresql@16`, `php`, `mysql` or `mailpit` are started, an upgrade will
 bounce them mid-run. Pick an hour you are reliably not working. 04:00 is the
-default for that reason.
+default for that reason. With several runs a day some will land while you work;
+a run only restarts a service when that formula actually has an upgrade.
 
 ## Checking on it
 

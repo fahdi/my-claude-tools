@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # brew-upgrade - unattended Homebrew maintenance for cron
 #
-# Runs: brew update, brew upgrade (formulae), brew cleanup.
+# Runs: brew update, brew upgrade --formula, brew cleanup.
 #
-# Casks are deliberately NOT upgraded. Upgrading a cask can force-quit a
+# Casks are deliberately NOT upgraded, hence --formula: a plain "brew upgrade"
+# upgrades casks as well. Upgrading a cask can force-quit a
 # running GUI app, and some casks need a sudo password that cron cannot
 # supply. Upgrade those by hand.
 #
@@ -101,7 +102,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "brew binary: $BREW_BIN"
     echo "log file:    $LOG"
     echo "would run:   $BREW_BIN update"
-    echo "would run:   $BREW_BIN upgrade"
+    echo "would run:   $BREW_BIN upgrade --formula"
     [ "$DO_CLEANUP" = "1" ] && echo "would run:   $BREW_BIN cleanup --prune=all"
     exit 0
 fi
@@ -117,7 +118,7 @@ log "brew maintenance run starting"
 
 failed=""
 run_step "brew update"  "$BREW_BIN" update  || failed="${failed} update"
-run_step "brew upgrade" "$BREW_BIN" upgrade || failed="${failed} upgrade"
+run_step "brew upgrade" "$BREW_BIN" upgrade --formula || failed="${failed} upgrade"
 if [ "$DO_CLEANUP" = "1" ]; then
     run_step "brew cleanup" "$BREW_BIN" cleanup --prune=all || failed="${failed} cleanup"
 fi

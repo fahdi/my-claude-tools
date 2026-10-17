@@ -57,28 +57,47 @@ launchctl_calls() { cat "$TMP/launchctl.calls" 2>/dev/null || true; }
 
 @test "default time is 04:00" {
     run "$INSTALL"
-    run plutil -extract StartCalendarInterval.Hour raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Hour raw -o - "$PLIST"
     [ "$output" = "4" ]
-    run plutil -extract StartCalendarInterval.Minute raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Minute raw -o - "$PLIST"
     [ "$output" = "0" ]
 }
 
 @test "--at sets the hour and minute" {
     run "$INSTALL" --at 23:45
     [ "$status" -eq 0 ]
-    run plutil -extract StartCalendarInterval.Hour raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Hour raw -o - "$PLIST"
     [ "$output" = "23" ]
-    run plutil -extract StartCalendarInterval.Minute raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Minute raw -o - "$PLIST"
     [ "$output" = "45" ]
 }
 
 @test "--at treats 08 and 09 as decimal, not octal" {
     run "$INSTALL" --at 09:08
     [ "$status" -eq 0 ]
-    run plutil -extract StartCalendarInterval.Hour raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Hour raw -o - "$PLIST"
     [ "$output" = "9" ]
-    run plutil -extract StartCalendarInterval.Minute raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Minute raw -o - "$PLIST"
     [ "$output" = "8" ]
+}
+
+@test "--at takes a comma-separated list, one calendar entry per time" {
+    run "$INSTALL" --at 04:00,10:30,16:00
+    [ "$status" -eq 0 ]
+    run plutil -extract StartCalendarInterval raw -o - "$PLIST"
+    [ "$output" = "3" ]
+    run plutil -extract StartCalendarInterval.1.Hour raw -o - "$PLIST"
+    [ "$output" = "10" ]
+    run plutil -extract StartCalendarInterval.1.Minute raw -o - "$PLIST"
+    [ "$output" = "30" ]
+    run plutil -extract StartCalendarInterval.2.Hour raw -o - "$PLIST"
+    [ "$output" = "16" ]
+}
+
+@test "--at rejects a list with one bad time and writes nothing" {
+    run "$INSTALL" --at 04:00,4pm
+    [ "$status" -ne 0 ]
+    [ ! -f "$PLIST" ]
 }
 
 @test "--at rejects a malformed time" {
@@ -114,7 +133,7 @@ launchctl_calls() { cat "$TMP/launchctl.calls" 2>/dev/null || true; }
     run "$INSTALL"
     run "$INSTALL" --at 05:00
     [[ "$(launchctl_calls)" == *"bootout"* ]]
-    run plutil -extract StartCalendarInterval.Hour raw -o - "$PLIST"
+    run plutil -extract StartCalendarInterval.0.Hour raw -o - "$PLIST"
     [ "$output" = "5" ]
 }
 

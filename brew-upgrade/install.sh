@@ -46,13 +46,14 @@ while [ $# -gt 0 ]; do
         --cron)      MODE="cron" ;;
         --launchd)   MODE="launchd" ;;
         --uninstall) UNINSTALL=1 ;;
-        --at)        shift; AT="${1:?--at needs HH:MM}" ;;
+        --at)        shift; AT="${1:?--at needs HH:MM[,HH:MM...]}" ;;
         --schedule)  shift; CRON_SCHEDULE="${1:?--schedule needs a cron expression}"; MODE="cron" ;;
         -h|--help)
             cat <<'USAGE'
-Usage: ./install.sh [--at HH:MM] [--cron [--schedule '0 4 * * *']] [--uninstall]
+Usage: ./install.sh [--at HH:MM[,HH:MM...]] [--cron [--schedule '0 4 * * *']] [--uninstall]
 
-  --at HH:MM    Time of day for the launchd agent (default 04:00).
+  --at HH:MM    Time(s) of day for the launchd agent, comma-separated for
+                several runs a day (default 04:00).
   --cron        Install a crontab entry instead of a launchd agent.
   --schedule    Cron expression, implies --cron.
   --uninstall   Remove whichever of the two is installed (both are checked).
@@ -108,14 +109,28 @@ if [ "$MODE" = "cron" ]; then
     success "Installed crontab entry: $CRON_SCHEDULE"
     warn "cron does not run a job whose time passed while the Mac was asleep."
 else
-    case "$AT" in
-        [0-9][0-9]:[0-9][0-9]) ;;
-        *) die "--at expects HH:MM, got '$AT'" ;;
-    esac
-    hour=$((10#${AT%%:*}))
-    minute=$((10#${AT##*:}))
-    [ "$hour" -le 23 ] || die "hour out of range in '$AT'"
-    [ "$minute" -le 59 ] || die "minute out of range in '$AT'"
+    # Validate every time before writing anything, so one bad entry in the
+    # list leaves the installed agent untouched.
+    intervals=""
+    IFS=',' read -r -a times <<< "$AT"
+    [ "${#times[@]}" -gt 0 ] || die "--at expects HH:MM, got '$AT'"
+    for t in "${times[@]}"; do
+        case "$t" in
+            [0-9][0-9]:[0-9][0-9]) ;;
+            *) die "--at expects HH:MM, got '$t'" ;;
+        esac
+        hour=$((10#${t%%:*}))
+        minute=$((10#${t##*:}))
+        [ "$hour" -le 23 ] || die "hour out of range in '$t'"
+        [ "$minute" -le 59 ] || die "minute out of range in '$t'"
+        intervals="${intervals}        <dict>
+            <key>Hour</key>
+            <integer>${hour}</integer>
+            <key>Minute</key>
+            <integer>${minute}</integer>
+        </dict>
+"
+    done
 
     mkdir -p "$AGENT_DIR"
     cat > "$PLIST" <<PLISTEOF
@@ -130,12 +145,8 @@ else
         <string>${SOURCE}</string>
     </array>
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>${hour}</integer>
-        <key>Minute</key>
-        <integer>${minute}</integer>
-    </dict>
+    <array>
+${intervals}    </array>
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
@@ -154,7 +165,7 @@ PLISTEOF
         || die "launchctl could not load $PLIST"
 
     remove_cron && info "Removed the old crontab entry; launchd owns this job now."
-    success "Installed launchd agent: daily at ${AT}"
+    success "Installed launchd agent: daily at ${AT//,/, }"
     info "Label: $LABEL"
     info "Plist: $PLIST"
 fi

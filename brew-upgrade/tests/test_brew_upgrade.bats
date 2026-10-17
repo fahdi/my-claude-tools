@@ -47,7 +47,7 @@ notifications() { cat "${BREW_UPGRADE_NOTIFIER}.calls" 2>/dev/null || true; }
     [ "$status" -eq 0 ]
     run cat "$TMP/brew.calls"
     [ "${lines[0]}" = "update" ]
-    [ "${lines[1]}" = "upgrade" ]
+    [ "${lines[1]}" = "upgrade --formula" ]
     [ "${lines[2]}" = "cleanup --prune=all" ]
 }
 
@@ -85,7 +85,7 @@ notifications() { cat "${BREW_UPGRADE_NOTIFIER}.calls" 2>/dev/null || true; }
     fake_brew 1 update
     run "$TOOL"
     run cat "$TMP/brew.calls"
-    [ "${lines[1]}" = "upgrade" ]
+    [ "${lines[1]}" = "upgrade --formula" ]
     [ "${lines[2]}" = "cleanup --prune=all" ]
 }
 
@@ -107,9 +107,12 @@ notifications() { cat "${BREW_UPGRADE_NOTIFIER}.calls" 2>/dev/null || true; }
 }
 
 @test "never upgrades casks" {
+    # Regression: plain "brew upgrade" upgrades casks too, so the old check
+    # for the word "cask" passed while casks were being upgraded.
     fake_brew
     run "$TOOL"
-    [[ "$(cat "$TMP/brew.calls")" != *"cask"* ]]
+    grep -qx "upgrade --formula" "$TMP/brew.calls"
+    ! grep -qx "upgrade" "$TMP/brew.calls"
 }
 
 @test "aborts and notifies when brew is missing" {

@@ -45,7 +45,7 @@ hours() { plutil -extract StartCalendarInterval json -o - "$PLIST" | tr ',' '\n'
     run "$INSTALL" --every 5
     [ "$status" -ne 0 ]
     [ ! -f "$PLIST" ]
-    [[ "$output" == *"divide 24"* ]]
+    [[ "$output" == *"divide 24"* ]] || false
 }
 
 @test "--every rejects nonsense and out-of-range values" {
@@ -73,7 +73,7 @@ hours() { plutil -extract StartCalendarInterval json -o - "$PLIST" | tr ',' '\n'
 @test "the agent runs the real script" {
     run "$INSTALL"
     run plutil -extract ProgramArguments.0 raw -o - "$PLIST"
-    [[ "$output" == *"/bin/disk-cleanup.sh" ]]
+    [[ "$output" == *"/bin/disk-cleanup.sh" ]] || false
 }
 
 @test "RunAtLoad is false so installing does not start a cleanup" {
@@ -84,13 +84,13 @@ hours() { plutil -extract StartCalendarInterval json -o - "$PLIST" | tr ',' '\n'
 
 @test "it is bootstrapped into launchd" {
     run "$INSTALL"
-    [[ "$(cat "$TMP/launchctl.calls")" == *"bootstrap"* ]]
+    [[ "$(cat "$TMP/launchctl.calls")" == *"bootstrap"* ]] || false
 }
 
 @test "reinstalling boots the old agent out first" {
     run "$INSTALL"
     run "$INSTALL" --every 4
-    [[ "$(cat "$TMP/launchctl.calls")" == *"bootout"* ]]
+    [[ "$(cat "$TMP/launchctl.calls")" == *"bootout"* ]] || false
     [ "$(hours)" = "0 4 8 12 16 20 " ]
 }
 
@@ -105,7 +105,7 @@ hours() { plutil -extract StartCalendarInterval json -o - "$PLIST" | tr ',' '\n'
 @test "--uninstall on a clean machine still exits 0" {
     run "$INSTALL" --uninstall
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Nothing installed"* ]]
+    [[ "$output" == *"Nothing installed"* ]] || false
 }
 
 @test "unknown options are rejected" {

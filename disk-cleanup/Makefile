@@ -1,4 +1,4 @@
-.PHONY: test lint install uninstall dry-run force status log
+.PHONY: test lint install uninstall dry-run dry-run-launchd force status log
 
 test:
 	@echo "=== bats ==="
@@ -15,6 +15,11 @@ uninstall:
 
 dry-run:
 	./bin/disk-cleanup.sh --dry-run
+
+# The same dry run with the bare PATH launchd gives the agent. Every tool
+# listed as "(not found)" here is one the scheduled job silently skips.
+dry-run-launchd:
+	env -i HOME="$$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin ./bin/disk-cleanup.sh --dry-run
 
 force:
 	./bin/disk-cleanup.sh --force

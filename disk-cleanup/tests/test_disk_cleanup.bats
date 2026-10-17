@@ -49,13 +49,63 @@ exit 0
 EOS
     chmod +x "$TMP/cargo"
 
+    # flutter clean runs from inside the project, so the fake records where.
+    cat > "$TMP/flutter" <<EOS
+#!/usr/bin/env bash
+echo "flutter \$@ in \$PWD" >> "$CALLS"
+exit 0
+EOS
+    chmod +x "$TMP/flutter"
+
+    # Every tool must be a fake. A real docker here would prune this machine.
+    DOCKER_INFO_EXIT=0
+    write_fake_docker
+
     export DISK_CLEANUP_UV="$TMP/uv" DISK_CLEANUP_PNPM="$TMP/pnpm" \
            DISK_CLEANUP_NPM="$TMP/npm" DISK_CLEANUP_BREW="$TMP/brew" \
-           DISK_CLEANUP_XCRUN="$TMP/xcrun" DISK_CLEANUP_CARGO="$TMP/cargo"
+           DISK_CLEANUP_XCRUN="$TMP/xcrun" DISK_CLEANUP_CARGO="$TMP/cargo" \
+           DISK_CLEANUP_FLUTTER="$TMP/flutter" DISK_CLEANUP_DOCKER="$TMP/docker"
 
     ROOT="$TMP/src"
     mkdir -p "$ROOT"
     export DISK_CLEANUP_CARGO_ROOTS="$ROOT"
+
+    DERIVED="$TMP/Xcode/DerivedData"
+    mkdir -p "$DERIVED"
+    export DISK_CLEANUP_DERIVED_DATA="$DERIVED"
+
+    REPORTED="$TMP/reported"
+    mkdir -p "$REPORTED/models" "$REPORTED/ide data"
+    export DISK_CLEANUP_REPORT_PATHS="$REPORTED/models:$REPORTED/ide data:$REPORTED/absent"
+
+    # Below this after a run, the job alerts. Low enough here that the pruning
+    # tests below (10GB free) do not also trip it; the alert has its own tests.
+    export DISK_CLEANUP_CRITICAL_FREE_GB=5
+}
+
+# A docker whose daemon is up unless DOCKER_INFO_EXIT says otherwise.
+write_fake_docker() {
+    cat > "$TMP/docker" <<EOS
+#!/usr/bin/env bash
+if [ "\$1" = "info" ]; then exit $DOCKER_INFO_EXIT; fi
+echo "docker \$@" >> "$CALLS"
+exit 0
+EOS
+    chmod +x "$TMP/docker"
+}
+
+# Builds a Flutter project at $1. $2 and $3 are the ages ("old"|"new"|"none")
+# of its build/ and .dart_tool/.
+make_flutter_project() {
+    local name="$1" build="$2" tool="$3" d age
+    mkdir -p "$ROOT/$name"
+    touch "$ROOT/$name/pubspec.yaml"
+    for d in build .dart_tool; do
+        if [ "$d" = build ]; then age="$build"; else age="$tool"; fi
+        [ "$age" = none ] && continue
+        mkdir -p "$ROOT/$name/$d"
+        if [ "$age" = old ]; then touch -t 202001010000 "$ROOT/$name/$d"; fi
+    done
 }
 
 # Builds a Rust project at $1 whose target/ was last touched $2 ("old"|"new").
@@ -73,6 +123,8 @@ make_rust_project() {
 set_free()      { echo "$1" > "$FREEFILE"; }
 calls()         { cat "$CALLS" 2>/dev/null || true; }
 notifications() { cat "$TMP/notify.calls" 2>/dev/null || true; }
+# A plain `! grep` cannot fail a bats test, so negative log checks go here.
+not_logged()    { if grep -q "$1" "$DISK_CLEANUP_LOG"; then echo "unexpectedly logged: $1" >&2; return 1; fi; }
 fail_tool() {
     cat > "$TMP/$1" <<EOS
 #!/usr/bin/env bash
@@ -100,11 +152,11 @@ EOS
     set_free 10
     run "$TOOL"
     [ "$status" -eq 0 ]
-    [[ "$(calls)" == *"uv cache prune"* ]]
-    [[ "$(calls)" == *"pnpm store prune"* ]]
-    [[ "$(calls)" == *"npm cache clean --force"* ]]
-    [[ "$(calls)" == *"brew cleanup --prune=all"* ]]
-    [[ "$(calls)" == *"xcrun simctl delete unavailable"* ]]
+    [[ "$(calls)" == *"uv cache prune"* ]] || false
+    [[ "$(calls)" == *"pnpm store prune"* ]] || false
+    [[ "$(calls)" == *"npm cache clean --force"* ]] || false
+    [[ "$(calls)" == *"brew cleanup --prune=all"* ]] || false
+    [[ "$(calls)" == *"xcrun simctl delete unavailable"* ]] || false
 }
 
 @test "exactly at the threshold it does not prune" {
@@ -122,18 +174,18 @@ EOS
 @test "it never deletes a store outright, only prunes" {
     set_free 10
     run "$TOOL"
-    [[ "$(calls)" != *"rm "* ]]
-    [[ "$(calls)" != *"cache clean"* ]] || [[ "$(calls)" == *"npm cache clean --force"* ]]
+    [[ "$(calls)" != *"rm "* ]] || false
+    [[ "$(calls)" != *"cache clean"* ]] || [[ "$(calls)" == *"npm cache clean --force"* ]] || false
     # pnpm and uv must be reached through prune, never a destructive verb.
-    [[ "$(calls)" == *"pnpm store prune"* ]]
-    [[ "$(calls)" != *"pnpm store path"* ]]
+    [[ "$(calls)" == *"pnpm store prune"* ]] || false
+    [[ "$(calls)" != *"pnpm store path"* ]] || false
 }
 
 @test "--force prunes even with plenty of space" {
     set_free 500
     run "$TOOL" --force
     [ "$status" -eq 0 ]
-    [[ "$(calls)" == *"uv cache prune"* ]]
+    [[ "$(calls)" == *"uv cache prune"* ]] || false
     grep -q "forced" "$DISK_CLEANUP_LOG"
 }
 
@@ -155,7 +207,7 @@ EOS
     run "$TOOL"
     [ "$status" -eq 0 ]
     grep -q "SKIP  uv cache" "$DISK_CLEANUP_LOG"
-    [[ "$(calls)" == *"pnpm store prune"* ]]
+    [[ "$(calls)" == *"pnpm store prune"* ]] || false
 }
 
 @test "a failing pruner gives exit 1 and notifies" {
@@ -164,15 +216,15 @@ EOS
     run "$TOOL"
     [ "$status" -eq 1 ]
     grep -q "FAIL  pnpm store (exit 3)" "$DISK_CLEANUP_LOG"
-    [[ "$(notifications)" == *"Failed: pnpm"* ]]
+    [[ "$(notifications)" == *"Failed: pnpm"* ]] || false
 }
 
 @test "a failing pruner does not stop the others" {
     set_free 10
     fail_tool uv
     run "$TOOL"
-    [[ "$(calls)" == *"brew cleanup --prune=all"* ]]
-    [[ "$(calls)" == *"xcrun simctl delete unavailable"* ]]
+    [[ "$(calls)" == *"brew cleanup --prune=all"* ]] || false
+    [[ "$(calls)" == *"xcrun simctl delete unavailable"* ]] || false
 }
 
 @test "a successful run notifies nobody" {
@@ -199,13 +251,13 @@ EOS
     run "$TOOL" --dry-run
     [ "$status" -eq 0 ]
     [ -z "$(calls)" ]
-    [[ "$output" == *"would prune"* ]]
+    [[ "$output" == *"would prune"* ]] || false
 }
 
 @test "--dry-run says so when it would do nothing" {
     set_free 100
     run "$TOOL" --dry-run
-    [[ "$output" == *"would do nothing"* ]]
+    [[ "$output" == *"would do nothing"* ]] || false
 }
 
 @test "unreadable free space aborts instead of guessing" {
@@ -239,14 +291,14 @@ EOS
     make_rust_project idle old
     run "$TOOL"
     [ "$status" -eq 0 ]
-    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/idle/Cargo.toml"* ]]
+    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/idle/Cargo.toml"* ]] || false
 }
 
 @test "leaves an actively built target alone" {
     set_free 10
     make_rust_project active new
     run "$TOOL"
-    [[ "$(calls)" != *"cargo clean"* ]]
+    [[ "$(calls)" != *"cargo clean"* ]] || false
     grep -q "nothing idle for 30+ days" "$DISK_CLEANUP_LOG"
 }
 
@@ -255,8 +307,8 @@ EOS
     make_rust_project idle old
     make_rust_project active new
     run "$TOOL"
-    [[ "$(calls)" == *"$ROOT/idle/Cargo.toml"* ]]
-    [[ "$(calls)" != *"$ROOT/active/Cargo.toml"* ]]
+    [[ "$(calls)" == *"$ROOT/idle/Cargo.toml"* ]] || false
+    [[ "$(calls)" != *"$ROOT/active/Cargo.toml"* ]] || false
 }
 
 @test "a target directory with no Cargo.toml beside it is ignored" {
@@ -264,7 +316,7 @@ EOS
     mkdir -p "$ROOT/not-rust/target"
     touch -t 202001010000 "$ROOT/not-rust/target"
     run "$TOOL"
-    [[ "$(calls)" != *"not-rust"* ]]
+    [[ "$(calls)" != *"not-rust"* ]] || false
 }
 
 @test "the age threshold is configurable in both directions" {
@@ -275,12 +327,12 @@ EOS
 
     # A 5-day-old target is stale under a 3-day threshold.
     DISK_CLEANUP_TARGET_MAX_AGE_DAYS=3 run "$TOOL"
-    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/fivedays/Cargo.toml"* ]]
+    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/fivedays/Cargo.toml"* ]] || false
 
     # ...and still fresh under a 10-day one.
     : > "$CALLS"
     DISK_CLEANUP_TARGET_MAX_AGE_DAYS=10 run "$TOOL"
-    [[ "$(calls)" != *"cargo clean"* ]]
+    [[ "$(calls)" != *"cargo clean"* ]] || false
 }
 
 @test "missing cargo is skipped, not failed" {
@@ -311,7 +363,7 @@ EOS
     chmod +x "$TMP/cargo"
     run "$TOOL"
     [ "$status" -eq 1 ]
-    [[ "$(notifications)" == *"cargo"* ]]
+    [[ "$(notifications)" == *"cargo"* ]] || false
 }
 
 @test "--dry-run does not clean a stale target" {
@@ -326,4 +378,181 @@ EOS
     make_rust_project idle old
     run "$TOOL"
     [ -z "$(calls)" ]
+}
+
+# --- launchd environment ---------------------------------------------------
+
+@test "finds tools under launchd's minimal PATH" {
+    # The regression: launchd starts the job with /usr/bin:/bin:/usr/sbin:/sbin,
+    # and tools were looked up before PATH was widened, so every pruner except
+    # xcrun was skipped as "not installed".
+    set_free 10
+    mkdir -p "$HOME/.local/bin" "$HOME/.cargo/bin"
+    cp "$TMP/uv" "$HOME/.local/bin/uv"
+    cp "$TMP/cargo" "$HOME/.cargo/bin/cargo"
+    make_rust_project idle old
+    unset DISK_CLEANUP_UV DISK_CLEANUP_CARGO
+    run env PATH=/usr/bin:/bin:/usr/sbin:/sbin "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"uv cache prune"* ]] || false
+    [[ "$(calls)" == *"cargo clean --manifest-path $ROOT/idle/Cargo.toml"* ]] || false
+    not_logged "SKIP  uv cache"
+}
+
+# --- Flutter ---------------------------------------------------------------
+
+@test "cleans a Flutter project whose build output has gone stale" {
+    set_free 10
+    make_flutter_project app old old
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"flutter clean in $ROOT/app"* ]] || false
+}
+
+@test "leaves a Flutter project with a fresh build/ alone" {
+    set_free 10
+    make_flutter_project app new old
+    run "$TOOL"
+    [[ "$(calls)" != *"flutter clean"* ]] || false
+}
+
+@test "a fresh .dart_tool/ also keeps a Flutter project" {
+    set_free 10
+    make_flutter_project app old new
+    run "$TOOL"
+    [[ "$(calls)" != *"flutter clean"* ]] || false
+}
+
+@test "a stale .dart_tool/ alone is enough to clean" {
+    set_free 10
+    make_flutter_project worktree none old
+    run "$TOOL"
+    [[ "$(calls)" == *"flutter clean in $ROOT/worktree"* ]] || false
+}
+
+@test "a pubspec.yaml with no build output is ignored" {
+    set_free 10
+    make_flutter_project pristine none none
+    run "$TOOL"
+    [[ "$(calls)" != *"flutter clean"* ]] || false
+    grep -q "OK    flutter builds (nothing idle" "$DISK_CLEANUP_LOG"
+}
+
+@test "a stale build/ with no pubspec.yaml beside it is ignored" {
+    set_free 10
+    mkdir -p "$ROOT/not-flutter/build"
+    touch -t 202001010000 "$ROOT/not-flutter/build"
+    run "$TOOL"
+    [[ "$(calls)" != *"flutter clean"* ]] || false
+}
+
+@test "missing flutter is skipped, not failed" {
+    set_free 10
+    make_flutter_project app old old
+    export DISK_CLEANUP_FLUTTER="$TMP/no-flutter-here"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "SKIP  flutter builds (flutter not installed)" "$DISK_CLEANUP_LOG"
+}
+
+# --- Xcode DerivedData -----------------------------------------------------
+
+@test "removes idle DerivedData entries and keeps fresh ones" {
+    set_free 10
+    mkdir -p "$DERIVED/Old-abc/Build" "$DERIVED/Fresh-def/Build"
+    touch -t 202001010000 "$DERIVED/Old-abc"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [ ! -e "$DERIVED/Old-abc" ]
+    [ -d "$DERIVED/Fresh-def" ]
+    [ -d "$DERIVED" ]
+}
+
+@test "refuses a DerivedData path that is not named DerivedData" {
+    set_free 10
+    mkdir -p "$TMP/Precious/Old-abc"
+    touch -t 202001010000 "$TMP/Precious/Old-abc"
+    export DISK_CLEANUP_DERIVED_DATA="$TMP/Precious"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [ -d "$TMP/Precious/Old-abc" ]
+    grep -q "is not a DerivedData directory" "$DISK_CLEANUP_LOG"
+}
+
+@test "--dry-run removes no DerivedData" {
+    set_free 10
+    mkdir -p "$DERIVED/Old-abc"
+    touch -t 202001010000 "$DERIVED/Old-abc"
+    run "$TOOL" --dry-run
+    [ -d "$DERIVED/Old-abc" ]
+    [[ "$output" == *"$DERIVED/Old-abc"* ]] || false
+}
+
+# --- Docker ----------------------------------------------------------------
+
+@test "prunes docker build cache by age and dangling images only" {
+    set_free 10
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"docker builder prune -af --filter until=720h"* ]] || false
+    [[ "$(calls)" == *"docker image prune -f"* ]] || false
+    # Volumes hold local databases; containers hold state. Never either.
+    [[ "$(calls)" != *"volume"* ]] || false
+    [[ "$(calls)" != *"system prune"* ]] || false
+    [[ "$(calls)" != *"container prune"* ]] || false
+    [[ "$(calls)" != *"image prune -a"* ]] || false
+}
+
+@test "a stopped docker daemon is skipped, not failed" {
+    set_free 10
+    DOCKER_INFO_EXIT=1
+    write_fake_docker
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" != *"docker "* ]] || false
+    grep -q "SKIP  docker (daemon not running)" "$DISK_CLEANUP_LOG"
+}
+
+# --- still low after a run -------------------------------------------------
+
+@test "alerts when space is still critical after a run, naming the largest path" {
+    set_free 10
+    export DISK_CLEANUP_CRITICAL_FREE_GB=15
+    head -c 2097152 /dev/zero > "$REPORTED/ide data/blob"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "LOW   only 10GB free after cleanup" "$DISK_CLEANUP_LOG"
+    grep -q "LOW .*$REPORTED/ide data" "$DISK_CLEANUP_LOG"
+    [[ "$(notifications)" == *"Only 10GB free after cleanup"* ]] || false
+    [[ "$(notifications)" == *"Disk space still low"* ]] || false
+    [[ "$(notifications)" == *"Largest: "*"$REPORTED/ide data"* ]] || false
+}
+
+@test "reported paths are never pruned" {
+    set_free 1
+    export DISK_CLEANUP_CRITICAL_FREE_GB=15
+    touch "$REPORTED/models/model.bin"
+    run "$TOOL"
+    [ -f "$REPORTED/models/model.bin" ]
+}
+
+@test "no low-space alert once a run has recovered enough" {
+    set_free 10
+    export DISK_CLEANUP_CRITICAL_FREE_GB=15
+    cat > "$TMP/npm" <<EOS
+#!/usr/bin/env bash
+echo "npm \$@" >> "$CALLS"
+echo 30 > "$FREEFILE"
+EOS
+    chmod +x "$TMP/npm"
+    run "$TOOL"
+    not_logged "LOW"
+    [ -z "$(notifications)" ]
+}
+
+@test "--dry-run lists the largest reported paths" {
+    set_free 100
+    run "$TOOL" --dry-run
+    [[ "$output" == *"Largest paths that are reported, never pruned:"* ]] || false
+    [[ "$output" == *"$REPORTED/models"* ]] || false
 }

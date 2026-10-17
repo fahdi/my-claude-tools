@@ -5,8 +5,11 @@
 A `~/.claude/settings.json` you can copy and have work. Every path and command
 in it resolves once [`scripts/bootstrap.sh`](../scripts/bootstrap.sh) has run.
 
-The one thing it cannot supply is `statusline.sh`, which is personal and is not
-in this repo — delete the `statusLine` block if you do not have your own.
+A starter `statusline.sh` lives in this directory — copy it to
+`~/.claude/statusline.sh` (and `chmod +x` it). It shows model, directory, git
+branch, and context usage on line one (context turns red above 40% used), and
+the 5-hour and weekly rate-limit windows with start→end times, usage %, and the
+account email on line two. Delete the `statusLine` block if you don't want one.
 
 ### What is deliberately not in it
 

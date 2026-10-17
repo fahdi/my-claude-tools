@@ -10,7 +10,7 @@ validate:
 
 test-python:
 	@echo "=== pytest ==="
-	~/.local/bin/pytest tests/test_parse_transcript.py -v
+	pytest tests/test_parse_transcript.py -v
 
 test-bats:
 	@echo "=== bats ==="

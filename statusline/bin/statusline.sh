@@ -286,74 +286,178 @@ get_oauth_token() {
 }
 
 # ── Fetch usage data (cached) ──────────────────────────
+# The usage endpoint is shared by every open session and rate-limits hard
+# (HTTP 429 with a Retry-After of ~120s). Three rules keep us honest:
+#   1. one cache file per config dir, TTL STATUSLINE_USAGE_TTL (default 120s);
+#   2. a 429 writes a backoff stamp that every session respects, so seven
+#      bars do not keep the limit tripped forever;
+#   3. only one process fetches at a time (mkdir lock), the rest read the cache.
+# A response is accepted when it carries any limit at all. The old check for
+# .five_hour froze the bar the day Anthropic dropped the five-hour limit, since
+# that field is now null on accounts without it.
 cache_key=$(printf '%s' "$config_dir" | shasum -a 256 2>/dev/null | cut -c1-8)
-cache_file="/tmp/claude/statusline-usage-cache-${cache_key:-default}.json"
-cache_max_age=60
-mkdir -p /tmp/claude
+cache_dir="${STATUSLINE_USAGE_CACHE_DIR:-/tmp/claude}"
+cache_file="${STATUSLINE_USAGE_CACHE_FILE:-$cache_dir/statusline-usage-cache-${cache_key:-default}.json}"
+backoff_file="${cache_file%.json}.backoff"
+lock_dir="${cache_file%.json}.lock"
+cache_max_age="${STATUSLINE_USAGE_TTL:-120}"
+mkdir -p "$(dirname "$cache_file")" 2>/dev/null
 
+file_mtime() {
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+now=$(date +%s)
 needs_refresh=true
 usage_data=""
+cache_age=""
 
 if [ -f "$cache_file" ]; then
-    cache_mtime=$(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null)
-    now=$(date +%s)
-    cache_age=$(( now - cache_mtime ))
+    cache_mtime=$(file_mtime "$cache_file")
+    cache_age=$(( now - ${cache_mtime:-0} ))
     if [ "$cache_age" -lt "$cache_max_age" ]; then
         needs_refresh=false
-        usage_data=$(cat "$cache_file" 2>/dev/null)
+    fi
+    usage_data=$(cat "$cache_file" 2>/dev/null)
+fi
+
+# Honour a backoff another render set after a 429.
+if $needs_refresh && [ -f "$backoff_file" ]; then
+    backoff_until=$(cat "$backoff_file" 2>/dev/null)
+    if [ "${backoff_until:-0}" -gt "$now" ] 2>/dev/null; then
+        needs_refresh=false
+    else
+        rm -f "$backoff_file"
     fi
 fi
 
+[ -n "$STATUSLINE_NO_FETCH" ] && needs_refresh=false
+
 if $needs_refresh; then
-    token=$(get_oauth_token)
-    if [ -n "$token" ] && [ "$token" != "null" ]; then
-        response=$(curl -s --max-time 5 \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $token" \
-            -H "anthropic-beta: oauth-2025-04-20" \
-            -H "User-Agent: claude-code/2.1.34" \
-            "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-        if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
-            usage_data="$response"
-            echo "$response" > "$cache_file"
-        fi
+    # Stale lock (>15s) means a previous render died mid-fetch; reclaim it.
+    if [ -d "$lock_dir" ]; then
+        lock_age=$(( now - $(file_mtime "$lock_dir" || echo 0) ))
+        [ "$lock_age" -gt 15 ] && rmdir "$lock_dir" 2>/dev/null
     fi
-    if [ -z "$usage_data" ] && [ -f "$cache_file" ]; then
-        usage_data=$(cat "$cache_file" 2>/dev/null)
+    if mkdir "$lock_dir" 2>/dev/null; then
+        trap 'rmdir "$lock_dir" 2>/dev/null' EXIT
+        token=$(get_oauth_token)
+        if [ -n "$token" ] && [ "$token" != "null" ]; then
+            headers_file=$(mktemp "${TMPDIR:-/tmp}/statusline-hdr.XXXXXX" 2>/dev/null)
+            response=$(curl -s --max-time 5 \
+                -D "${headers_file:-/dev/null}" \
+                -H "Accept: application/json" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $token" \
+                -H "anthropic-beta: oauth-2025-04-20" \
+                -H "User-Agent: claude-code/2.1.316" \
+                "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+            http_status=""
+            retry_after=""
+            if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
+                http_status=$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$headers_file")
+                retry_after=$(awk 'tolower($1)=="retry-after:" {gsub(/\r/,"",$2); print $2}' "$headers_file" | tail -1)
+                rm -f "$headers_file"
+            fi
+            if echo "$response" | jq -e '(.limits // empty) or (.seven_day // empty) or (.five_hour // empty)' >/dev/null 2>&1; then
+                usage_data="$response"
+                printf '%s' "$response" > "$cache_file"
+                rm -f "$backoff_file"
+                cache_age=0
+            elif [ "$http_status" = "429" ] || echo "$response" | jq -e '.error.type == "rate_limit_error"' >/dev/null 2>&1; then
+                case "$retry_after" in
+                    ''|*[!0-9]*) retry_after=120 ;;
+                esac
+                echo $(( now + retry_after )) > "$backoff_file"
+            fi
+        fi
+        rmdir "$lock_dir" 2>/dev/null
+        trap - EXIT
     fi
 fi
 
 # ── Rate limit lines ────────────────────────────────────
+# Rendered from the `limits` array so the bar follows whatever limits the
+# account actually has: weekly_all, a per-model weekly_scoped, and a session
+# limit only on plans that still carry one. Falls back to the legacy
+# five_hour/seven_day fields when `limits` is absent.
 rate_lines=""
+stale_after="${STATUSLINE_USAGE_STALE_AFTER:-300}"
+
+label_for_limit() {  # kind, scope display name
+    case "$1" in
+        session)       printf "current" ;;
+        weekly_all)    printf "weekly" ;;
+        weekly_scoped)
+            local name
+            name=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+            printf "%s" "${name:-scoped}" ;;
+        *)             printf "%s" "$1" ;;
+    esac
+}
+
+render_limit() {  # label, pct, resets_at iso, style
+    local label="$1" pct="$2" reset_iso="$3" style="$4"
+    local bar_width=10
+    local pct_int
+    pct_int=$(printf '%s' "$pct" | awk '{printf "%.0f", $1+0}')
+    local reset_str
+    reset_str=$(format_reset_time "$reset_iso" "$style")
+
+    # A reset time already in the past means the number is dead, not low.
+    local reset_epoch
+    reset_epoch=$(iso_to_epoch "$reset_iso" 2>/dev/null)
+    if [ -n "$reset_epoch" ] && [ "$reset_epoch" -lt "$now" ]; then
+        printf "%b" "${white}$(printf '%-7s' "$label")${reset} $(build_bar 0 $bar_width) ${dim} --%${reset} ${dim}⟳ ${reset_str} (expired)${reset}"
+        return
+    fi
+
+    local bar color fmt
+    bar=$(build_bar "$pct_int" "$bar_width")
+    color=$(color_for_pct "$pct_int")
+    fmt=$(printf "%3d" "$pct_int")
+    printf "%b" "${white}$(printf '%-7s' "$label")${reset} ${bar} ${color}${fmt}%${reset} ${dim}⟳${reset} ${white}${reset_str}${reset}"
+}
 
 if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
-    bar_width=10
+    has_limits=$(echo "$usage_data" | jq -r '(.limits | type) == "array" and (.limits | length) > 0')
 
-    five_hour_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
-    five_hour_reset_iso=$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')
-    five_hour_reset=$(format_reset_time "$five_hour_reset_iso" "time")
-    five_hour_bar=$(build_bar "$five_hour_pct" "$bar_width")
-    five_hour_pct_color=$(color_for_pct "$five_hour_pct")
-    five_hour_pct_fmt=$(printf "%3d" "$five_hour_pct")
-
-    rate_lines+="${white}current${reset} ${five_hour_bar} ${five_hour_pct_color}${five_hour_pct_fmt}%${reset} ${dim}⟳${reset} ${white}${five_hour_reset}${reset}"
-
-    seven_day_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
-    seven_day_reset_iso=$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')
-    seven_day_reset=$(format_reset_time "$seven_day_reset_iso" "datetime")
-    seven_day_bar=$(build_bar "$seven_day_pct" "$bar_width")
-    seven_day_pct_color=$(color_for_pct "$seven_day_pct")
-    seven_day_pct_fmt=$(printf "%3d" "$seven_day_pct")
-
-    rate_lines+="\n${white}weekly${reset}  ${seven_day_bar} ${seven_day_pct_color}${seven_day_pct_fmt}%${reset} ${dim}⟳${reset} ${white}${seven_day_reset}${reset}"
+    if [ "$has_limits" = "true" ]; then
+        while IFS=$'\t' read -r kind pct reset_iso scope_name; do
+            [ -z "$kind" ] && continue
+            label=$(label_for_limit "$kind" "$scope_name")
+            style="datetime"
+            [ "$kind" = "session" ] && style="time"
+            line=$(render_limit "$label" "$pct" "$reset_iso" "$style")
+            [ -n "$rate_lines" ] && rate_lines+="\n"
+            rate_lines+="$line"
+        done < <(echo "$usage_data" | jq -r '
+            .limits[]
+            | [ .kind, (.percent // 0 | tostring), (.resets_at // ""),
+                (.scope.model.display_name // "") ]
+            | @tsv')
+    else
+        five_hour_present=$(echo "$usage_data" | jq -r '.five_hour != null')
+        if [ "$five_hour_present" = "true" ]; then
+            rate_lines+=$(render_limit "current" \
+                "$(echo "$usage_data" | jq -r '.five_hour.utilization // 0')" \
+                "$(echo "$usage_data" | jq -r '.five_hour.resets_at // ""')" time)
+        fi
+        seven_day_present=$(echo "$usage_data" | jq -r '.seven_day != null')
+        if [ "$seven_day_present" = "true" ]; then
+            [ -n "$rate_lines" ] && rate_lines+="\n"
+            rate_lines+=$(render_limit "weekly" \
+                "$(echo "$usage_data" | jq -r '.seven_day.utilization // 0')" \
+                "$(echo "$usage_data" | jq -r '.seven_day.resets_at // ""')" datetime)
+        fi
+    fi
 
     extra_enabled=$(echo "$usage_data" | jq -r '.extra_usage.is_enabled // false')
     if [ "$extra_enabled" = "true" ]; then
         extra_pct=$(echo "$usage_data" | jq -r '.extra_usage.utilization // 0' | awk '{printf "%.0f", $1}')
         extra_used=$(echo "$usage_data" | jq -r '.extra_usage.used_credits // 0' | awk '{printf "%.2f", $1/100}')
         extra_limit=$(echo "$usage_data" | jq -r '.extra_usage.monthly_limit // 0' | awk '{printf "%.2f", $1/100}')
-        extra_bar=$(build_bar "$extra_pct" "$bar_width")
+        extra_bar=$(build_bar "$extra_pct" 10)
         extra_pct_color=$(color_for_pct "$extra_pct")
 
         extra_reset=$(date -v+1m -v1d +"%b %-d" 2>/dev/null | tr '[:upper:]' '[:lower:]')
@@ -361,10 +465,22 @@ if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
             extra_reset=$(date -d "$(date +%Y-%m-01) +1 month" +"%b %-d" 2>/dev/null | tr '[:upper:]' '[:lower:]')
         fi
 
-        extra_col="${white}extra${reset}   ${extra_bar} ${extra_pct_color}\$${extra_used}${dim}/${reset}${white}\$${extra_limit}${reset}"
+        extra_col="${white}extra  ${reset} ${extra_bar} ${extra_pct_color}\$${extra_used}${dim}/${reset}${white}\$${extra_limit}${reset}"
         extra_reset_line="${dim}resets ${reset}${white}${extra_reset}${reset}"
-        rate_lines+="\n${extra_col}"
+        [ -n "$rate_lines" ] && rate_lines+="\n"
+        rate_lines+="${extra_col}"
         rate_lines+="\n${extra_reset_line}"
+    fi
+
+    # Say so when the numbers are old. A bar that silently shows yesterday
+    # is worse than no bar.
+    if [ -n "$rate_lines" ] && [ -n "$cache_age" ] && [ "$cache_age" -ge "$stale_after" ]; then
+        if [ "$cache_age" -ge 3600 ]; then
+            age_str="$(( cache_age / 3600 ))h ago"
+        else
+            age_str="$(( cache_age / 60 ))m ago"
+        fi
+        rate_lines+="\n${dim}usage data from ${age_str}${reset}"
     fi
 fi
 

@@ -2,7 +2,7 @@
 
 test:
 	@echo "=== bats ==="
-	bats tests/test_tool_status.bats
+	bats tests/
 
 install:
 	./install.sh

@@ -6,8 +6,8 @@ question the bar never could: **are my tools actually installed, and where?**
 ```
 Opus 5 │ ✍️ 26% │ my-claude-tools (main*) │ ⏱ 54m │ ◑ default │ 👤 Fahad
 
-current ○○○○○○○○○○   4% ⟳ 3:30pm
-weekly  ●●○○○○○○○○  28% ⟳ aug 24, 11:00am
+weekly  ○○○○○○○○○○   4% ⟳ nov 9, 10:59am
+fable   ○○○○○○○○○○   7% ⟳ nov 9, 10:59am
 
 🔧 log ✔  diary ✔  rtk ✔0.45  gh ✔2.97  gsd ⚠  mem ✔
    8 plugins · 59 skills · 37 agents · 5 mcp
@@ -120,6 +120,29 @@ only when the cache refreshes, and are bounded at 5s.
 
 Labels want to be 3-6 characters; the bar is not wide.
 
+## Rate limits
+
+The second block is drawn from the `limits` array of the OAuth usage endpoint,
+so it shows whatever limits the account actually has: the all-models weekly
+cap, a per-model scoped weekly cap (`fable` above), and a `current` five-hour
+session line only on plans that still carry one. Anthropic dropped the
+five-hour limit on verified Ultra accounts at the end of October 2026; the old
+bar kept checking for that field and froze on the last response that had it.
+
+Three guards keep the numbers honest:
+
+- A reset time already in the past renders as `--% (expired)` instead of a
+  stale percentage.
+- A cache older than 300s gets a `usage data from 26h ago` footer
+  (`STATUSLINE_USAGE_STALE_AFTER`).
+- A 429 from the endpoint writes a backoff stamp honoured by every open
+  session, and only one render fetches at a time. Seven open sessions used to
+  poll every 60s each and keep the limit tripped indefinitely.
+
+The usage cache lives at `/tmp/claude/statusline-usage-cache-<hash>.json` with
+a 120s TTL (`STATUSLINE_USAGE_TTL`). Set `STATUSLINE_NO_FETCH=1` to render from
+the cache alone.
+
 ## Cost
 
 The bar re-renders constantly, so the inventory is cached for 300s in
@@ -133,8 +156,9 @@ manifest, malformed settings. A broken inventory must never break the bar.
 ## Tests
 
 ```bash
-make test    # 28 bats tests, none of which touch the real ~/.claude
+make test    # 38 bats tests, none of which touch the real ~/.claude
 ```
 
-Each test builds a throwaway profile in `$BATS_TEST_TMPDIR` and points
-`TOOL_STATUS_PROFILES` at it.
+Each tool-status test builds a throwaway profile in `$BATS_TEST_TMPDIR` and
+points `TOOL_STATUS_PROFILES` at it. The statusline tests feed a canned usage
+cache through `STATUSLINE_USAGE_CACHE_FILE` with `STATUSLINE_NO_FETCH=1`.

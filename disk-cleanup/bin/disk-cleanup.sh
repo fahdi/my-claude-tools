@@ -56,6 +56,8 @@ DOCKER_BIN="${DISK_CLEANUP_DOCKER:-$(resolve docker)}"
 # The same age applies to Rust, Flutter, Xcode DerivedData and Docker's build
 # cache.
 TARGET_MAX_AGE_DAYS="${DISK_CLEANUP_TARGET_MAX_AGE_DAYS:-30}"
+# Seconds uv may wait for its cache lock before the step is logged as busy.
+UV_LOCK_WAIT="${DISK_CLEANUP_UV_LOCK_TIMEOUT:-10}"
 read -r -a CARGO_ROOTS <<< "${DISK_CLEANUP_CARGO_ROOTS:-$HOME/Code $HOME/websites}"
 CARGO_DEPTH="${DISK_CLEANUP_CARGO_DEPTH:-7}"
 DERIVED_DATA="${DISK_CLEANUP_DERIVED_DATA:-$HOME/Library/Developer/Xcode/DerivedData}"
@@ -184,6 +186,37 @@ prune_step() {
         log "OK    ${label}"
     else
         log "FAIL  ${label} (exit ${rc})"
+    fi
+    return "$rc"
+}
+
+# Prunes the uv cache, or logs it as busy. Long-running uvx processes (MCP
+# servers such as chroma-mcp) hold the cache lock for as long as they run,
+# often days, so a locked cache is the normal state here. uv's default wait is
+# 300s, which made every run hang five minutes and then report a failure.
+# Waiting briefly and logging BUSY keeps the log honest without alarming
+# anyone. `--force` would skip the lock, but it can delete files a running
+# uvx environment still needs, so it is never used.
+prune_uv() {
+    if [ -z "$UV_BIN" ] || { [ ! -x "$UV_BIN" ] && ! command -v "$UV_BIN" >/dev/null 2>&1; }; then
+        log "SKIP  uv cache (not installed)"
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "WOULD uv cache: $UV_BIN cache prune"
+        return 0
+    fi
+    local rc=0 out
+    log "START uv cache: $UV_BIN cache prune (lock wait ${UV_LOCK_WAIT}s)"
+    out="$(UV_LOCK_TIMEOUT="$UV_LOCK_WAIT" "$UV_BIN" cache prune 2>&1)" || rc=$?
+    printf '%s\n' "$out" >> "$LOG"
+    if [ "$rc" -eq 0 ]; then
+        log "OK    uv cache"
+    elif printf '%s' "$out" | grep -q "when waiting for lock"; then
+        log "BUSY  uv cache (locked by running uv processes, retried next run)"
+        rc=0
+    else
+        log "FAIL  uv cache (exit ${rc})"
     fi
     return "$rc"
 }
@@ -442,7 +475,7 @@ else
 fi
 
 failed=""
-prune_step "uv cache"       "$UV_BIN"    cache prune                  || failed="${failed} uv"
+prune_uv                                                                || failed="${failed} uv"
 prune_step "pnpm store"     "$PNPM_BIN"  store prune                  || failed="${failed} pnpm"
 prune_step "npm cache"      "$NPM_BIN"   cache clean --force          || failed="${failed} npm"
 prune_step "brew cleanup"   "$BREW_BIN"  cleanup --prune=all          || failed="${failed} brew"

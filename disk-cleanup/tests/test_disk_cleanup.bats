@@ -227,6 +227,51 @@ EOS
     [[ "$(calls)" == *"xcrun simctl delete unavailable"* ]] || false
 }
 
+# Long-running uvx processes (MCP servers) hold the uv cache lock for days, so
+# a locked cache is the normal state, not a failure.
+busy_uv() {
+    cat > "$TMP/uv" <<EOS
+#!/usr/bin/env bash
+echo "uv \$@ UV_LOCK_TIMEOUT=\${UV_LOCK_TIMEOUT:-unset}" >> "$CALLS"
+echo "Cache is currently in-use, waiting for other uv processes to finish" >&2
+echo "error: Timeout (\${UV_LOCK_TIMEOUT}s) when waiting for lock on \\\`$HOME/.cache/uv\\\`" >&2
+exit 2
+EOS
+    chmod +x "$TMP/uv"
+}
+
+@test "a uv cache locked by running processes is skipped as busy, not failed" {
+    set_free 10
+    busy_uv
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "BUSY  uv cache" "$DISK_CLEANUP_LOG"
+    not_logged "FAIL  uv cache"
+    [ -z "$(notifications)" ]
+}
+
+@test "uv waits only briefly for its cache lock" {
+    set_free 10
+    busy_uv
+    run "$TOOL"
+    [[ "$(calls)" == *"uv cache prune UV_LOCK_TIMEOUT=10"* ]] || false
+}
+
+@test "the uv lock wait is configurable" {
+    set_free 10
+    busy_uv
+    DISK_CLEANUP_UV_LOCK_TIMEOUT=3 run "$TOOL"
+    [[ "$(calls)" == *"UV_LOCK_TIMEOUT=3"* ]] || false
+}
+
+@test "a uv failure that is not a lock timeout still fails" {
+    set_free 10
+    fail_tool uv
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    grep -q "FAIL  uv cache (exit 3)" "$DISK_CLEANUP_LOG"
+}
+
 @test "a successful run notifies nobody" {
     set_free 10
     run "$TOOL"

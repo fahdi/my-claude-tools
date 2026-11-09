@@ -76,6 +76,19 @@ next build. Entries idle for 30+ days are removed directly. As a guard, the
 configured path must end in `DerivedData`; anything else is skipped and logged,
 so a bad `DISK_CLEANUP_DERIVED_DATA` cannot aim the delete anywhere else.
 
+### A busy uv cache is skipped, not failed
+
+Long-running `uvx` processes, typically MCP servers such as chroma-mcp or an
+AWS MCP proxy, hold the uv cache lock for as long as they run, often days. From
+2026-10-20 every run waited uv's default 300s for that lock, gave up, and
+logged `FAIL uv cache`, so the job looked broken while uv was never pruned.
+
+uv now waits only `DISK_CLEANUP_UV_LOCK_TIMEOUT` seconds (10 by default). A lock
+timeout is logged as `BUSY  uv cache` and does not fail the run or notify; any
+other uv error still does. The cache is pruned on the first run after those
+processes restart. `uv cache prune --force` would skip the lock, but it can
+delete files a running uvx environment still needs, so it is never used.
+
 ### Docker: caches yes, data never
 
 Only the build cache (older than the idle age) and dangling images are pruned.
@@ -212,6 +225,7 @@ A run that acted logs each step and the net result:
 | `DISK_CLEANUP_CARGO_ROOTS` | `~/Code ~/websites` | Where to look for Rust and Flutter projects |
 | `DISK_CLEANUP_CARGO_DEPTH` | `7` | How deep to search for them |
 | `DISK_CLEANUP_DERIVED_DATA` | `~/Library/Developer/Xcode/DerivedData` | Must end in `DerivedData` |
+| `DISK_CLEANUP_UV_LOCK_TIMEOUT` | `10` | Seconds uv waits for its cache lock before the step is logged as busy |
 | `DISK_CLEANUP_REPORT_PATHS` | `~/.ollama`, `~/.cache`, `~/.gemini`, Docker's container, simulators, `~/Library/Android`, `~/Downloads` | Colon separated; measured, never pruned |
 | `DISK_CLEANUP_UV` / `_PNPM` / `_NPM` / `_BREW` / `_XCRUN` / `_CARGO` / `_FLUTTER` / `_DOCKER` | from `PATH` | Tool locations |
 
@@ -229,6 +243,10 @@ the real disk or deleting anything.
 - **`brew cleanup` also runs daily** in [brew-upgrade](../brew-upgrade). The
   overlap is harmless, and it means a disk filling fast still gets swept every
   two hours rather than once a day.
+- **pnpm through an old corepack breaks on pnpm 12.** Corepack 0.23 looks for
+  `bin/pnpm.cjs`, which pnpm 12 no longer ships, so every `pnpm` call (this
+  job's included) crashed with `Cannot find module`. That is a machine fix, not
+  a script fix: `npm i -g corepack@latest` (0.36.0 fixed it on 2026-11-10).
 - **Failure alerts need a logged-in GUI session.** At the login window the
   notification is dropped and the log is the only record. The exit status is
   still 1.

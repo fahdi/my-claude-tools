@@ -135,6 +135,22 @@ for a month. Entries idle `DISK_CLEANUP_TARGET_MAX_AGE_DAYS` (30) are removed
 with npm's own `npm cache npx rm`, except any that appear in a running
 process's command line (an MCP server started weeks ago is still in use).
 
+### Registered project pruners
+
+A project whose tests leave caches, traces or screenshots behind registers its
+own prune command in `~/.config/disk-cleanup/pruners` (override with
+`DISK_CLEANUP_PRUNERS_FILE`), one per line as `<label>|<command> [args]`:
+
+```
+# label|command args
+my project tests|$HOME/Code/my-project/tests/prune.sh --prune
+```
+
+Each runs on every pruning pass, after the built-in targets. Lines starting
+with `#` are skipped, a command that is not installed is logged as SKIP, and a
+failing command or malformed line makes the run exit 1. Arguments split on
+whitespace, so command paths must not contain spaces.
+
 ### The wpmcp test cache
 
 The wpmcp plugin's local test harness (`bin/test-local.sh` in the wpmcp

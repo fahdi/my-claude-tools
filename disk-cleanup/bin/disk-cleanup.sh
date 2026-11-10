@@ -69,6 +69,10 @@ PNPM_FALLBACKS="${DISK_CLEANUP_PNPM_FALLBACKS-$HOME/Library/pnpm/pnpm:$HOME/.loc
 WPMCP_CACHE="${DISK_CLEANUP_WPMCP_CACHE:-$HOME/.cache/wpmcp-tests}"
 WPMCP_REPO="${DISK_CLEANUP_WPMCP_REPO:-$HOME/Code/wpmcppro/wpmcp}"
 WPMCP_IDLE_HOURS="${DISK_CLEANUP_WPMCP_IDLE_HOURS:-6}"
+# Projects' own prune commands, one per line as `<label>|<command> [args]`.
+# Lets a project's test harness register its cleanup without this script
+# knowing about it; see prune_registered.
+PRUNERS_FILE="${DISK_CLEANUP_PRUNERS_FILE:-$HOME/.config/disk-cleanup/pruners}"
 # npx keeps one install per package spec here, forever.
 NPX_DIR="${DISK_CLEANUP_NPX_DIR:-$HOME/.npm/_npx}"
 PS_BIN="${DISK_CLEANUP_PS:-/bin/ps}"
@@ -115,6 +119,8 @@ Environment:
   DISK_CLEANUP_WPMCP_REPO    wpmcp checkout whose test-local.sh --prune is used.
   DISK_CLEANUP_WPMCP_IDLE_HOURS
                              Remove wpmcp installs unused this long (default 6).
+  DISK_CLEANUP_PRUNERS_FILE  Registered prune commands, one `label|command args`
+                             per line (default ~/.config/disk-cleanup/pruners).
   DISK_CLEANUP_RATE_WINDOW_HOURS
                              Max age of the previous sample used to project how
                              fast space is falling (default 6).
@@ -342,6 +348,28 @@ wpmcp_has_prune() {
 # when the checkout has it. Otherwise only idle installs and dead runs' cores
 # are removed; mariadb/ (the test database server), configs/, locks/ and
 # notes/ are never touched.
+# Runs each prune command registered in PRUNERS_FILE. Blank lines and lines
+# starting with # are ignored. Arguments are split on whitespace, so a command
+# path must not contain spaces. A command that is not installed is skipped.
+prune_registered() {
+    [ -f "$PRUNERS_FILE" ] || return 0
+    local rc=0 line label cmd
+    local -a argv
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        label="${line%%|*}"
+        cmd="${line#*|}"
+        if [ "$label" = "$line" ] || [ -z "$label" ] || [ -z "${cmd// /}" ]; then
+            log "FAIL  registered pruner: malformed line: ${line}"
+            rc=1
+            continue
+        fi
+        read -r -a argv <<< "$cmd"
+        prune_step "$label" "${argv[0]}" "${argv[@]:1}" || rc=1
+    done < "$PRUNERS_FILE"
+    return "$rc"
+}
+
 prune_wpmcp_tests() {
     local label="wpmcp tests"
     case "$WPMCP_CACHE" in
@@ -752,6 +780,7 @@ if [ "$rc" -eq 2 ]; then warned="${warned} pnpm"; elif [ "$rc" -ne 0 ]; then fai
 prune_step "npm cache"      "$NPM_BIN"   cache clean --force          || failed="${failed} npm"
 prune_npx                                                               || failed="${failed} npx"
 prune_wpmcp_tests                                                       || failed="${failed} wpmcp"
+prune_registered                                                        || failed="${failed} registered"
 prune_step "brew cleanup"   "$BREW_BIN"  cleanup --prune=all          || failed="${failed} brew"
 prune_step "stale sims"     "$XCRUN_BIN" simctl delete unavailable    || failed="${failed} simulators"
 prune_cargo_targets                                                     || failed="${failed} cargo"

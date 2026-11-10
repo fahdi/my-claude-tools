@@ -88,6 +88,8 @@ EOS
     # No pnpm fallbacks unless a test supplies them, so the real pnpm on this
     # machine can never be picked up.
     export DISK_CLEANUP_PNPM_FALLBACKS=""
+    # Never the real registered pruners on this machine.
+    export DISK_CLEANUP_PRUNERS_FILE="$TMP/pruners"
     # The process list the npx step checks for running servers.
     PSOUT="$TMP/ps.out"; : > "$PSOUT"
     cat > "$TMP/ps" <<EOS
@@ -906,4 +908,61 @@ state()        { printf '%s %s\n' "$(( $(date +%s) - $1 ))" "$2" > "$TMP/cleanup
     run "$TOOL"
     [ -n "$(calls)" ]
     [ ! -e "$TMP/cleanup.lock" ]
+}
+
+# --- registered pruners ----------------------------------------------------
+
+write_fake_pruner() {
+    cat > "$TMP/$1" <<EOS
+#!/usr/bin/env bash
+echo "$1 \$*" >> "$CALLS"
+exit ${2:-0}
+EOS
+    chmod +x "$TMP/$1"
+}
+
+@test "registered: runs each listed prune command with its arguments" {
+    set_free 10
+    write_fake_pruner proj-a
+    write_fake_pruner proj-b
+    printf '# comment\n\nproj a tests|%s --prune\nproj b|%s\n' "$TMP/proj-a" "$TMP/proj-b" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"proj-a --prune"* ]] || false
+    [[ "$(calls)" == *"proj-b"* ]] || false
+    grep -q "OK    proj a tests" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: no file means nothing to do" {
+    set_free 10
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    ! grep -q "registered pruner" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: a missing command is skipped, not failed" {
+    set_free 10
+    printf 'gone|%s --prune\n' "$TMP/not-there" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "SKIP  gone (not installed)" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: a failing command or malformed line fails the run" {
+    set_free 10
+    write_fake_pruner bad 3
+    printf 'bad|%s\nno separator here\n' "$TMP/bad" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    grep -q "FAIL  bad (exit 3)" "$DISK_CLEANUP_LOG"
+    grep -q "malformed line: no separator here" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: dry run only reports" {
+    set_free 10
+    write_fake_pruner proj-a
+    printf 'proj a|%s --prune\n' "$TMP/proj-a" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" != *"proj-a"* ]] || false
 }

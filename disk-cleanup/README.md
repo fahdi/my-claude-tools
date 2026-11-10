@@ -13,6 +13,25 @@ dropped below a threshold (40GB by default).
 That means the common case is a one-line log entry saying there was nothing to
 do. A quiet log is evidence the job is running, not evidence it is broken.
 
+### Free space falling fast
+
+A threshold alone reacts late. On 2026-11-09 a test harness filled the disk
+from comfortable to full between two runs. So each run also records free space
+(in `~/Library/Logs/disk-cleanup.state`), and the next run projects one interval
+ahead: if space fell from 100GB to 60GB since the last run, at that rate the run
+after this one would see 20GB, so it cleans now even though 60GB is above the
+threshold. The guard is still the design: a disk that is not filling, or is
+filling slowly, is left alone, and a sample older than
+`DISK_CLEANUP_RATE_WINDOW_HOURS` (6) is not used. The log says which rule fired:
+
+```
+cleanup starting, free space falling fast: 60GB now, about 20GB by the next run at this rate, threshold 40GB
+```
+
+Only one run happens at a time. A second run that starts while one is still
+going (a manual `make force` during a scheduled run, say) logs `SKIP  another
+run (pid N) is in progress` and exits. A lock left by a killed run is taken over.
+
 ## What it prunes
 
 | Target | Command | Why it is safe |
@@ -20,6 +39,8 @@ do. A quiet log is evidence the job is running, not evidence it is broken.
 | uv cache | `uv cache prune` | Removes wheels no environment references |
 | pnpm store | `pnpm store prune` | Removes packages no project references |
 | npm cache | `npm cache clean --force` | Fully regenerable |
+| npx installs | `npm cache npx rm <key>...` | Only entries idle 30+ days that no running process uses |
+| wpmcp test cache | `bin/test-local.sh --prune`, or the fallback below | Only installs idle 6h+ with no live lock, and cores whose run has exited |
 | Homebrew | `brew cleanup --prune=all` | Old versions and downloads |
 | iOS simulators | `xcrun simctl delete unavailable` | Simulators for SDKs you no longer have |
 | Rust builds | `cargo clean` | Only for projects idle 30+ days |
@@ -75,6 +96,85 @@ Xcode has no prune command, and every entry under
 next build. Entries idle for 30+ days are removed directly. As a guard, the
 configured path must end in `DerivedData`; anything else is skipped and logged,
 so a bad `DISK_CLEANUP_DERIVED_DATA` cannot aim the delete anywhere else.
+
+### A busy uv cache is skipped, not failed
+
+Long-running `uvx` processes, typically MCP servers such as chroma-mcp or an
+AWS MCP proxy, hold the uv cache lock for as long as they run, often days. From
+2026-10-20 every run waited uv's default 300s for that lock, gave up, and
+logged `FAIL uv cache`, so the job looked broken while uv was never pruned.
+
+uv now waits only `DISK_CLEANUP_UV_LOCK_TIMEOUT` seconds (10 by default). A lock
+timeout is logged as `BUSY  uv cache` and does not fail the run or notify; any
+other uv error still does. The cache is pruned on the first run after those
+processes restart. `uv cache prune --force` would skip the lock, but it can
+delete files a running uvx environment still needs, so it is never used.
+
+### A pnpm that cannot start is a warning, not a failure
+
+On 2026-11-10 the `pnpm` on `PATH` was corepack's shim, and corepack 0.23 could
+not run pnpm 12 (`Cannot find module ~/.cache/node/corepack/pnpm/12.10.1/bin/pnpm.cjs`),
+so the step failed before pnpm did anything. The step now checks that pnpm
+starts (`pnpm --version`) and, if not, tries `DISK_CLEANUP_PNPM_FALLBACKS`
+(`~/Library/pnpm/pnpm`, `~/.local/share/pnpm/pnpm`). If none starts it logs
+
+```
+WARN  pnpm store skipped: /opt/homebrew/bin/pnpm does not start (Error: Cannot find module ...). If it is corepack's shim, update corepack: npm i -g corepack@latest
+```
+
+and `RESULT: warnings: pnpm`, without failing the run. A pnpm that starts and
+then fails to prune still fails. The machine fix is still to update corepack
+(0.36.0 fixed it).
+
+### npx installs
+
+npx installs every package spec it runs, each MCP server version and every
+one-off tool, into its own directory under `~/.npm/_npx` and never removes any.
+`npm cache clean` does not touch them. 66 entries held 3.6GB here, 48 untouched
+for a month. Entries idle `DISK_CLEANUP_TARGET_MAX_AGE_DAYS` (30) are removed
+with npm's own `npm cache npx rm`, except any that appear in a running
+process's command line (an MCP server started weeks ago is still in use).
+
+### Registered project pruners
+
+A project whose tests leave caches, traces or screenshots behind registers its
+own prune command in `~/.config/disk-cleanup/pruners` (override with
+`DISK_CLEANUP_PRUNERS_FILE`), one per line as `<label>|<command> [args]`:
+
+```
+# label|command args
+my project tests|$HOME/Code/my-project/tests/prune.sh --prune
+```
+
+Each runs on every pruning pass, after the built-in targets. Lines starting
+with `#` are skipped, a command that is not installed is logged as SKIP, and a
+failing command or malformed line makes the run exit 1. Arguments split on
+whitespace, so command paths must not contain spaces.
+
+### The wpmcp test cache
+
+The wpmcp plugin's local test harness (`bin/test-local.sh` in the wpmcp
+checkout) keeps everything under `~/.cache/wpmcp-tests`: WordPress installs
+keyed on WordPress, installer and plugin versions (`wp-*-plugins-*`), a per-run
+copy of the core for every run (`cores/<hash>-<pid>`), a MariaDB server
+(`mariadb/`), per-run configs, locks and notes. It held 19GB on 2026-10-08 and
+helped fill the disk again on 2026-11-09.
+
+When the checkout's `bin/test-local.sh` has a `--prune` option, the job runs
+that (with `WPMCP_TEST_CACHE` set) and lets the harness decide. Otherwise it
+falls back to removing only:
+
+- `wp-*-plugins-*` installs whose `.last-used` is older than
+  `DISK_CLEANUP_WPMCP_IDLE_HOURS` (6) and whose `locks/install-<name>` and
+  `locks/pristine-<name>` are not held by a live process. A run touches
+  `.last-used` on every install it uses and lasts minutes, so an install idle
+  for hours is not in use. One with no `.last-used` is left alone.
+- `cores/<hash>-<pid>` copies whose PID is no longer running, left by killed
+  runs.
+
+`mariadb/`, `configs/`, `locks/` and `notes/` are never touched. Like
+DerivedData this is a direct `rm -rf`, so the configured path must end in
+`wpmcp-tests`.
 
 ### Docker: caches yes, data never
 
@@ -212,6 +312,15 @@ A run that acted logs each step and the net result:
 | `DISK_CLEANUP_CARGO_ROOTS` | `~/Code ~/websites` | Where to look for Rust and Flutter projects |
 | `DISK_CLEANUP_CARGO_DEPTH` | `7` | How deep to search for them |
 | `DISK_CLEANUP_DERIVED_DATA` | `~/Library/Developer/Xcode/DerivedData` | Must end in `DerivedData` |
+| `DISK_CLEANUP_UV_LOCK_TIMEOUT` | `10` | Seconds uv waits for its cache lock before the step is logged as busy |
+| `DISK_CLEANUP_PNPM_FALLBACKS` | `~/Library/pnpm/pnpm:~/.local/share/pnpm/pnpm` | Colon separated; tried when the pnpm on `PATH` does not start |
+| `DISK_CLEANUP_WPMCP_CACHE` | `~/.cache/wpmcp-tests` | Must end in `wpmcp-tests` |
+| `DISK_CLEANUP_WPMCP_REPO` | `~/Code/wpmcppro/wpmcp` | Checkout whose `bin/test-local.sh --prune` is used when present |
+| `DISK_CLEANUP_WPMCP_IDLE_HOURS` | `6` | Fallback: remove installs unused this long |
+| `DISK_CLEANUP_NPX_DIR` | `~/.npm/_npx` | npx install directory |
+| `DISK_CLEANUP_STATE` | `~/Library/Logs/disk-cleanup.state` | Free space at the last run, for the falling-fast check |
+| `DISK_CLEANUP_RATE_WINDOW_HOURS` | `6` | Ignore a last-run sample older than this |
+| `DISK_CLEANUP_LOCK` | `~/Library/Logs/disk-cleanup.lock` | One run at a time |
 | `DISK_CLEANUP_REPORT_PATHS` | `~/.ollama`, `~/.cache`, `~/.gemini`, Docker's container, simulators, `~/Library/Android`, `~/Downloads` | Colon separated; measured, never pruned |
 | `DISK_CLEANUP_UV` / `_PNPM` / `_NPM` / `_BREW` / `_XCRUN` / `_CARGO` / `_FLUTTER` / `_DOCKER` | from `PATH` | Tool locations |
 
@@ -229,6 +338,11 @@ the real disk or deleting anything.
 - **`brew cleanup` also runs daily** in [brew-upgrade](../brew-upgrade). The
   overlap is harmless, and it means a disk filling fast still gets swept every
   two hours rather than once a day.
+- **pnpm through an old corepack breaks on pnpm 12.** Corepack 0.23 looks for
+  `bin/pnpm.cjs`, which pnpm 12 no longer ships, so every `pnpm` call (this
+  job's included) crashed with `Cannot find module`. The machine fix is
+  `npm i -g corepack@latest` (0.36.0 fixed it on 2026-11-10); the job now
+  logs a warning instead of failing if it happens again.
 - **Failure alerts need a logged-in GUI session.** At the login window the
   notification is dropped and the log is the only record. The exit status is
   still 1.

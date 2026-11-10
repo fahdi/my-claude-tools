@@ -81,6 +81,23 @@ EOS
     # Below this after a run, the job alerts. Low enough here that the pruning
     # tests below (10GB free) do not also trip it; the alert has its own tests.
     export DISK_CLEANUP_CRITICAL_FREE_GB=5
+
+    # Never the real wpmcp checkout: a fake one, absent unless a test builds it.
+    export DISK_CLEANUP_WPMCP_REPO="$TMP/wpmcp"
+    WPCACHE="$HOME/.cache/wpmcp-tests"
+    # No pnpm fallbacks unless a test supplies them, so the real pnpm on this
+    # machine can never be picked up.
+    export DISK_CLEANUP_PNPM_FALLBACKS=""
+    # Never the real registered pruners on this machine.
+    export DISK_CLEANUP_PRUNERS_FILE="$TMP/pruners"
+    # The process list the npx step checks for running servers.
+    PSOUT="$TMP/ps.out"; : > "$PSOUT"
+    cat > "$TMP/ps" <<EOS
+#!/usr/bin/env bash
+cat "$PSOUT"
+EOS
+    chmod +x "$TMP/ps"
+    export DISK_CLEANUP_PS="$TMP/ps"
 }
 
 # A docker whose daemon is up unless DOCKER_INFO_EXIT says otherwise.
@@ -212,11 +229,11 @@ EOS
 
 @test "a failing pruner gives exit 1 and notifies" {
     set_free 10
-    fail_tool pnpm
+    fail_tool brew
     run "$TOOL"
     [ "$status" -eq 1 ]
-    grep -q "FAIL  pnpm store (exit 3)" "$DISK_CLEANUP_LOG"
-    [[ "$(notifications)" == *"Failed: pnpm"* ]] || false
+    grep -q "FAIL  brew cleanup (exit 3)" "$DISK_CLEANUP_LOG"
+    [[ "$(notifications)" == *"Failed: brew"* ]] || false
 }
 
 @test "a failing pruner does not stop the others" {
@@ -225,6 +242,51 @@ EOS
     run "$TOOL"
     [[ "$(calls)" == *"brew cleanup --prune=all"* ]] || false
     [[ "$(calls)" == *"xcrun simctl delete unavailable"* ]] || false
+}
+
+# Long-running uvx processes (MCP servers) hold the uv cache lock for days, so
+# a locked cache is the normal state, not a failure.
+busy_uv() {
+    cat > "$TMP/uv" <<EOS
+#!/usr/bin/env bash
+echo "uv \$@ UV_LOCK_TIMEOUT=\${UV_LOCK_TIMEOUT:-unset}" >> "$CALLS"
+echo "Cache is currently in-use, waiting for other uv processes to finish" >&2
+echo "error: Timeout (\${UV_LOCK_TIMEOUT}s) when waiting for lock on \\\`$HOME/.cache/uv\\\`" >&2
+exit 2
+EOS
+    chmod +x "$TMP/uv"
+}
+
+@test "a uv cache locked by running processes is skipped as busy, not failed" {
+    set_free 10
+    busy_uv
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "BUSY  uv cache" "$DISK_CLEANUP_LOG"
+    not_logged "FAIL  uv cache"
+    [ -z "$(notifications)" ]
+}
+
+@test "uv waits only briefly for its cache lock" {
+    set_free 10
+    busy_uv
+    run "$TOOL"
+    [[ "$(calls)" == *"uv cache prune UV_LOCK_TIMEOUT=10"* ]] || false
+}
+
+@test "the uv lock wait is configurable" {
+    set_free 10
+    busy_uv
+    DISK_CLEANUP_UV_LOCK_TIMEOUT=3 run "$TOOL"
+    [[ "$(calls)" == *"UV_LOCK_TIMEOUT=3"* ]] || false
+}
+
+@test "a uv failure that is not a lock timeout still fails" {
+    set_free 10
+    fail_tool uv
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    grep -q "FAIL  uv cache (exit 3)" "$DISK_CLEANUP_LOG"
 }
 
 @test "a successful run notifies nobody" {
@@ -555,4 +617,352 @@ EOS
     run "$TOOL" --dry-run
     [[ "$output" == *"Largest paths that are reported, never pruned:"* ]] || false
     [[ "$output" == *"$REPORTED/models"* ]] || false
+}
+
+# --- pnpm that cannot start ------------------------------------------------
+
+# corepack 0.23 shimming pnpm 12 crashed before pnpm ran, on 2026-11-10:
+# "Cannot find module ~/.cache/node/corepack/pnpm/12.10.1/bin/pnpm.cjs".
+broken_pnpm() {
+    cat > "$1" <<EOS
+#!/usr/bin/env bash
+echo "broken-pnpm \$@" >> "$CALLS"
+echo "Error: Cannot find module '$HOME/.cache/node/corepack/pnpm/12.10.1/bin/pnpm.cjs'" >&2
+exit 1
+EOS
+    chmod +x "$1"
+}
+
+@test "a pnpm that cannot start is skipped with a warning, not failed" {
+    set_free 10
+    broken_pnpm "$TMP/pnpm"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "WARN  pnpm store skipped" "$DISK_CLEANUP_LOG"
+    grep -q "Cannot find module" "$DISK_CLEANUP_LOG"
+    grep -q "corepack" "$DISK_CLEANUP_LOG"
+    not_logged "FAIL  pnpm"
+    [[ "$(calls)" != *"store prune"* ]] || false
+    [[ "$(calls)" == *"brew cleanup"* ]] || false
+    grep -q "RESULT: warnings: pnpm" "$DISK_CLEANUP_LOG"
+}
+
+@test "a broken pnpm falls back to one that runs" {
+    set_free 10
+    broken_pnpm "$TMP/pnpm"
+    mkdir -p "$TMP/alt"
+    cat > "$TMP/alt/pnpm" <<EOS
+#!/usr/bin/env bash
+echo "alt-pnpm \$@" >> "$CALLS"
+EOS
+    chmod +x "$TMP/alt/pnpm"
+    export DISK_CLEANUP_PNPM_FALLBACKS="$TMP/absent/pnpm:$TMP/alt/pnpm"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"alt-pnpm store prune"* ]] || false
+    grep -q "OK    pnpm store" "$DISK_CLEANUP_LOG"
+}
+
+@test "a pnpm that starts but fails to prune still fails" {
+    set_free 10
+    cat > "$TMP/pnpm" <<EOS
+#!/usr/bin/env bash
+echo "pnpm \$@" >> "$CALLS"
+[ "\$1" = "--version" ] && exit 0
+exit 4
+EOS
+    chmod +x "$TMP/pnpm"
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    grep -q "FAIL  pnpm store (exit 4)" "$DISK_CLEANUP_LOG"
+}
+
+# --- wpmcp test cache ------------------------------------------------------
+
+# Sets the mtime of $1 to $2 hours ago.
+hours_ago() { touch -t "$(date -v-"$2"H +%Y%m%d%H%M.%S)" "$1"; }
+
+# A dead PID: a subshell that has already exited.
+dead_pid() { ( exit 0 ) & local p=$!; wait "$p"; echo "$p"; }
+
+# One cache with something of every kind in it.
+make_wpmcp_cache() {
+    mkdir -p "$WPCACHE"/{mariadb/data,configs,locks,cores,notes}
+    echo db > "$WPCACHE/mariadb/data/ibdata1"
+    echo cfg > "$WPCACHE/configs/wpmcp_test_1.php"
+    hours_ago "$WPCACHE/mariadb/data/ibdata1" 200
+    hours_ago "$WPCACHE/configs/wpmcp_test_1.php" 200
+    local d
+    for d in idle fresh locked unstamped; do
+        mkdir -p "$WPCACHE/wp-7.1-aaa-plugins-$d/wordpress"
+    done
+    hours_ago_stamp idle 7
+    hours_ago_stamp locked 30
+    touch "$WPCACHE/wp-7.1-aaa-plugins-fresh/.last-used"
+    # Installs from before plugin keys existed are never touched.
+    mkdir -p "$WPCACHE/wp-6.9-bbb/wordpress"
+    hours_ago "$WPCACHE/wp-6.9-bbb" 500
+    mkdir -p "$WPCACHE/locks/install-wp-7.1-aaa-plugins-locked"
+    echo $$ > "$WPCACHE/locks/install-wp-7.1-aaa-plugins-locked/pid"
+    mkdir -p "$WPCACHE/cores/aaaaaaaaaaaa-$(dead_pid)" "$WPCACHE/cores/bbbbbbbbbbbb-$$"
+}
+hours_ago_stamp() { touch "$WPCACHE/wp-7.1-aaa-plugins-$1/.last-used"; hours_ago "$WPCACHE/wp-7.1-aaa-plugins-$1/.last-used" "$2"; }
+
+@test "wpmcp: removes idle installs and dead runs' cores, nothing else" {
+    set_free 10
+    make_wpmcp_cache
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [ ! -d "$WPCACHE/wp-7.1-aaa-plugins-idle" ]
+    [ -d "$WPCACHE/wp-7.1-aaa-plugins-fresh" ]
+    [ -d "$WPCACHE/wp-7.1-aaa-plugins-locked" ]
+    [ -d "$WPCACHE/wp-7.1-aaa-plugins-unstamped" ]
+    [ -d "$WPCACHE/wp-6.9-bbb" ]
+    [ -z "$(ls "$WPCACHE/cores" | grep aaaaaaaaaaaa)" ]
+    [ -d "$WPCACHE/cores/bbbbbbbbbbbb-$$" ]
+    [ -f "$WPCACHE/mariadb/data/ibdata1" ]
+    [ -f "$WPCACHE/configs/wpmcp_test_1.php" ]
+    [ -d "$WPCACHE/locks/install-wp-7.1-aaa-plugins-locked" ]
+    [ -d "$WPCACHE/notes" ]
+    grep -q "OK    wpmcp tests: removed .*wp-7.1-aaa-plugins-idle" "$DISK_CLEANUP_LOG"
+}
+
+@test "wpmcp: an install whose lock is held by a dead run is removed" {
+    set_free 10
+    make_wpmcp_cache
+    dead_pid > "$WPCACHE/locks/install-wp-7.1-aaa-plugins-locked/pid"
+    run "$TOOL"
+    [ ! -d "$WPCACHE/wp-7.1-aaa-plugins-locked" ]
+}
+
+@test "wpmcp: the idle age is configurable" {
+    set_free 10
+    make_wpmcp_cache
+    export DISK_CLEANUP_WPMCP_IDLE_HOURS=8
+    run "$TOOL"
+    [ -d "$WPCACHE/wp-7.1-aaa-plugins-idle" ]
+}
+
+@test "wpmcp: uses the harness's own --prune when the checkout has it" {
+    set_free 10
+    make_wpmcp_cache
+    mkdir -p "$DISK_CLEANUP_WPMCP_REPO/bin"
+    cat > "$DISK_CLEANUP_WPMCP_REPO/bin/test-local.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+    --prune) echo "test-local \$* in \$PWD cache=\${WPMCP_TEST_CACHE}" >> "$CALLS" ;;
+esac
+EOS
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"test-local --prune in $DISK_CLEANUP_WPMCP_REPO cache=$WPCACHE"* ]] || false
+    # The harness decides; the fallback does not run as well.
+    [ -d "$WPCACHE/wp-7.1-aaa-plugins-idle" ]
+}
+
+@test "wpmcp: a checkout without --prune gets the fallback" {
+    set_free 10
+    make_wpmcp_cache
+    mkdir -p "$DISK_CLEANUP_WPMCP_REPO/bin"
+    printf '#!/usr/bin/env bash\necho "test-local $*" >> "%s"\n' "$CALLS" > "$DISK_CLEANUP_WPMCP_REPO/bin/test-local.sh"
+    run "$TOOL"
+    [[ "$(calls)" != *"test-local"* ]] || false
+    [ ! -d "$WPCACHE/wp-7.1-aaa-plugins-idle" ]
+}
+
+@test "wpmcp: a failing --prune fails the step" {
+    set_free 10
+    make_wpmcp_cache
+    mkdir -p "$DISK_CLEANUP_WPMCP_REPO/bin"
+    printf '#!/usr/bin/env bash\ncase "$1" in --prune) exit 5 ;; esac\n' > "$DISK_CLEANUP_WPMCP_REPO/bin/test-local.sh"
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    grep -q "FAIL  wpmcp tests" "$DISK_CLEANUP_LOG"
+}
+
+@test "wpmcp: a cache path not named wpmcp-tests is refused" {
+    set_free 10
+    make_wpmcp_cache
+    mv "$WPCACHE" "$TMP/precious"
+    export DISK_CLEANUP_WPMCP_CACHE="$TMP/precious"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [ -d "$TMP/precious/wp-7.1-aaa-plugins-idle" ]
+    grep -q "SKIP  wpmcp tests (.* is not a wpmcp-tests directory)" "$DISK_CLEANUP_LOG"
+}
+
+@test "wpmcp: no cache is skipped, not failed" {
+    set_free 10
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "SKIP  wpmcp tests (not present)" "$DISK_CLEANUP_LOG"
+}
+
+@test "wpmcp: --dry-run lists idle installs and removes nothing" {
+    set_free 10
+    make_wpmcp_cache
+    run "$TOOL" --dry-run
+    [ -d "$WPCACHE/wp-7.1-aaa-plugins-idle" ]
+    [ -n "$(ls "$WPCACHE/cores" | grep aaaaaaaaaaaa)" ]
+    [[ "$output" == *"wp-7.1-aaa-plugins-idle"* ]] || false
+    [[ "$output" != *"wp-7.1-aaa-plugins-fresh"* ]] || false
+}
+
+# --- npx cache -------------------------------------------------------------
+
+make_npx_entry() {
+    mkdir -p "$HOME/.npm/_npx/$1/node_modules"
+    if [ "$2" = old ]; then touch -t 202001010000 "$HOME/.npm/_npx/$1"; fi
+}
+
+@test "npx: removes entries idle 30+ days through npm's own command" {
+    set_free 10
+    make_npx_entry 0aedce19bdc09f4b old
+    make_npx_entry 1111111111111111 new
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"npm cache npx rm 0aedce19bdc09f4b"* ]] || false
+    [[ "$(calls)" != *"1111111111111111"* ]] || false
+}
+
+@test "npx: an idle entry a running process uses is kept" {
+    set_free 10
+    make_npx_entry 0aedce19bdc09f4b old
+    echo "node $HOME/.npm/_npx/0aedce19bdc09f4b/node_modules/.bin/chrome-devtools-mcp" > "$PSOUT"
+    run "$TOOL"
+    [[ "$(calls)" != *"npx rm"* ]] || false
+    grep -q "npx cache (nothing idle" "$DISK_CLEANUP_LOG"
+}
+
+@test "npx: --dry-run removes nothing" {
+    set_free 10
+    make_npx_entry 0aedce19bdc09f4b old
+    run "$TOOL" --dry-run
+    [[ "$(calls)" != *"npx rm"* ]] || false
+    [[ "$output" == *"0aedce19bdc09f4b"* ]] || false
+}
+
+# --- free space falling fast -----------------------------------------------
+
+state()        { printf '%s %s\n' "$(( $(date +%s) - $1 ))" "$2" > "$TMP/cleanup.state"; }
+
+@test "acts above the threshold when the last run's rate would cross it by the next run" {
+    # 100GB -> 60GB in an hour; at that rate the next run sees 20GB.
+    state 3600 100
+    set_free 60
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [ -n "$(calls)" ]
+    grep -q "falling fast" "$DISK_CLEANUP_LOG"
+}
+
+@test "a slow decline above the threshold does nothing" {
+    state 3600 65
+    set_free 60
+    run "$TOOL"
+    [ -z "$(calls)" ]
+}
+
+@test "a stale sample is not used to project" {
+    state $(( 24 * 3600 )) 200
+    set_free 60
+    run "$TOOL"
+    [ -z "$(calls)" ]
+}
+
+@test "rising free space does nothing" {
+    state 3600 20
+    set_free 60
+    run "$TOOL"
+    [ -z "$(calls)" ]
+}
+
+@test "every run records free space for the next one" {
+    set_free 77
+    run "$TOOL"
+    [ "$(cut -d' ' -f2 "$TMP/cleanup.state")" = 77 ]
+}
+
+@test "--dry-run records nothing" {
+    set_free 77
+    run "$TOOL" --dry-run
+    [ ! -e "$TMP/cleanup.state" ]
+}
+
+# --- overlapping runs ------------------------------------------------------
+
+@test "a run already in progress makes a second one step aside" {
+    set_free 10
+    mkdir -p "$TMP/cleanup.lock"
+    echo $$ > "$TMP/cleanup.lock/pid"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [ -z "$(calls)" ]
+    grep -q "SKIP  another run (pid $$) is in progress" "$DISK_CLEANUP_LOG"
+}
+
+@test "a lock left by a dead run is taken over and released" {
+    set_free 10
+    mkdir -p "$TMP/cleanup.lock"
+    dead_pid > "$TMP/cleanup.lock/pid"
+    run "$TOOL"
+    [ -n "$(calls)" ]
+    [ ! -e "$TMP/cleanup.lock" ]
+}
+
+# --- registered pruners ----------------------------------------------------
+
+write_fake_pruner() {
+    cat > "$TMP/$1" <<EOS
+#!/usr/bin/env bash
+echo "$1 \$*" >> "$CALLS"
+exit ${2:-0}
+EOS
+    chmod +x "$TMP/$1"
+}
+
+@test "registered: runs each listed prune command with its arguments" {
+    set_free 10
+    write_fake_pruner proj-a
+    write_fake_pruner proj-b
+    printf '# comment\n\nproj a tests|%s --prune\nproj b|%s\n' "$TMP/proj-a" "$TMP/proj-b" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" == *"proj-a --prune"* ]] || false
+    [[ "$(calls)" == *"proj-b"* ]] || false
+    grep -q "OK    proj a tests" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: no file means nothing to do" {
+    set_free 10
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    ! grep -q "registered pruner" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: a missing command is skipped, not failed" {
+    set_free 10
+    printf 'gone|%s --prune\n' "$TMP/not-there" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL"
+    [ "$status" -eq 0 ]
+    grep -q "SKIP  gone (not installed)" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: a failing command or malformed line fails the run" {
+    set_free 10
+    write_fake_pruner bad 3
+    printf 'bad|%s\nno separator here\n' "$TMP/bad" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL"
+    [ "$status" -eq 1 ]
+    grep -q "FAIL  bad (exit 3)" "$DISK_CLEANUP_LOG"
+    grep -q "malformed line: no separator here" "$DISK_CLEANUP_LOG"
+}
+
+@test "registered: dry run only reports" {
+    set_free 10
+    write_fake_pruner proj-a
+    printf 'proj a|%s --prune\n' "$TMP/proj-a" > "$DISK_CLEANUP_PRUNERS_FILE"
+    run "$TOOL" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$(calls)" != *"proj-a"* ]] || false
 }

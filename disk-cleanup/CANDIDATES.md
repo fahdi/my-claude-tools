@@ -18,7 +18,12 @@ scheduled job, a report-only path, or a one-off manual cleanup.
 | 5.1GB | `~/.npm` | Packages re-download | Already pruned (`npm cache clean`) once the PATH fix lands; verify it actually runs |
 | 4.7GB | `~/Library/iTunes/iPad Software Updates` (old firmware) | None | Candidate: delete `.ipsw` files idle 30+ days |
 | 4.5GB | `~/Library/Application Support/com.apple.wallpaper` (aerial videos) | macOS re-downloads on demand | Manual |
-| 2.2GB | `~/Library/Caches/ms-playwright`, `ms-playwright-mcp` | Browsers re-download | Candidate: old browser revisions only |
+| 2.2GB | `~/Library/Caches/ms-playwright`, `ms-playwright-mcp` | Browsers re-download | Candidate: old browser revisions only (0.6GB on 2026-11-10) |
+| 1.2GB | `~/.cache/wpmcp-merge-queue` (wpmcp gate logs, about 45MB each) | None, logs of past gate runs | Candidate for wpmcp's own tooling: keep the newest N or 14 days |
+| 0.6GB | `~/.cache/chrome-devtools-mcp/chrome-profile` | A Chrome profile in use by the MCP server | Report only |
+| 2.9GB | `~/.cache/whisper-models` | Models re-download slowly | Report only, like `~/.ollama` |
+| 1.4GB | `~/.pub-cache` | `dart pub cache clean` removes all of it, so every Flutter project re-fetches | Manual |
+| 1.2GB | `~/.gradle/caches` | No safe prune command; Gradle ages entries out itself after 30 days | Leave |
 | 450MB | `~/Library/Caches/pip` | Re-download | Candidate: `pip cache purge` |
 
 ### Notes on `node_modules` in worktrees
@@ -52,6 +57,13 @@ Measured, but personal data or data a running project needs, so only ever by han
 - Local by Flywheel site data `~/Library/Application Support/Local/run` (18GB)
 - `~/websites` (125GB), source for active sites
 - Docker volumes that containers are using (~52GB)
+
+## Automated on 2026-11-10
+
+- `~/.cache/wpmcp-tests`: idle installs and dead runs' cores (see the README).
+- `~/.npm/_npx`: entries idle 30+ days that no running process uses, through
+  `npm cache npx rm`. This was 3.6GB, not part of the 5.1GB `~/.npm` above,
+  because `npm cache clean` never touches it.
 
 ## Already handled on 2026-10-08
 

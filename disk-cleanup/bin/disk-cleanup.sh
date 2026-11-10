@@ -12,9 +12,11 @@
 # same way, so deleting either directory outright breaks existing checkouts
 # rather than freeing space safely. "prune" removes only unreferenced entries.
 #
-# The one exception is Xcode DerivedData, which has no prune command. It is a
-# pure build cache that Xcode recreates, so idle entries are removed directly,
-# and only from a directory that is actually named DerivedData.
+# The exceptions are Xcode DerivedData and the wpmcp test cache, neither of
+# which has a prune command the job can rely on. Both are pure per-build or
+# per-run copies that their owners recreate, so idle entries are removed
+# directly, and only from a directory with the expected name. When the wpmcp
+# checkout ships its own `bin/test-local.sh --prune`, that is used instead.
 #
 # Nothing here touches user data. No Downloads, no Trash, no Documents, no
 # source files, no Docker volumes. Large things that are not safe to prune
@@ -58,6 +60,24 @@ DOCKER_BIN="${DISK_CLEANUP_DOCKER:-$(resolve docker)}"
 TARGET_MAX_AGE_DAYS="${DISK_CLEANUP_TARGET_MAX_AGE_DAYS:-30}"
 # Seconds uv may wait for its cache lock before the step is logged as busy.
 UV_LOCK_WAIT="${DISK_CLEANUP_UV_LOCK_TIMEOUT:-10}"
+# Other pnpm binaries to try when the one on PATH cannot start (a corepack shim
+# that has lost its pnpm, say). Colon separated; only ones that run are used.
+PNPM_FALLBACKS="${DISK_CLEANUP_PNPM_FALLBACKS-$HOME/Library/pnpm/pnpm:$HOME/.local/share/pnpm/pnpm}"
+# The wpmcp plugin's local test harness keeps WordPress installs, per-run core
+# copies, a MariaDB data dir and per-run configs here. Only installs and cores
+# are ever removed; see prune_wpmcp_tests.
+WPMCP_CACHE="${DISK_CLEANUP_WPMCP_CACHE:-$HOME/.cache/wpmcp-tests}"
+WPMCP_REPO="${DISK_CLEANUP_WPMCP_REPO:-$HOME/Code/wpmcppro/wpmcp}"
+WPMCP_IDLE_HOURS="${DISK_CLEANUP_WPMCP_IDLE_HOURS:-6}"
+# npx keeps one install per package spec here, forever.
+NPX_DIR="${DISK_CLEANUP_NPX_DIR:-$HOME/.npm/_npx}"
+PS_BIN="${DISK_CLEANUP_PS:-/bin/ps}"
+# Free space at the end of the previous run, for the falling-fast check, and
+# the lock that keeps two runs from interleaving.
+STATE="${DISK_CLEANUP_STATE:-${LOG%.log}.state}"
+RUN_LOCK="${DISK_CLEANUP_LOCK:-${LOG%.log}.lock}"
+# A sample older than this is not used to project a rate.
+RATE_WINDOW_HOURS="${DISK_CLEANUP_RATE_WINDOW_HOURS:-6}"
 read -r -a CARGO_ROOTS <<< "${DISK_CLEANUP_CARGO_ROOTS:-$HOME/Code $HOME/websites}"
 CARGO_DEPTH="${DISK_CLEANUP_CARGO_DEPTH:-7}"
 DERIVED_DATA="${DISK_CLEANUP_DERIVED_DATA:-$HOME/Library/Developer/Xcode/DerivedData}"
@@ -91,6 +111,13 @@ Environment:
                              Only clean build output idle this long (default 30).
   DISK_CLEANUP_DERIVED_DATA  Xcode DerivedData directory.
   DISK_CLEANUP_REPORT_PATHS  Colon-separated paths to report, never prune.
+  DISK_CLEANUP_WPMCP_CACHE   wpmcp test cache (default ~/.cache/wpmcp-tests).
+  DISK_CLEANUP_WPMCP_REPO    wpmcp checkout whose test-local.sh --prune is used.
+  DISK_CLEANUP_WPMCP_IDLE_HOURS
+                             Remove wpmcp installs unused this long (default 6).
+  DISK_CLEANUP_RATE_WINDOW_HOURS
+                             Max age of the previous sample used to project how
+                             fast space is falling (default 6).
 
 Exit status is 0 when every attempted step succeeded, 1 otherwise.
 USAGE
@@ -219,6 +246,177 @@ prune_uv() {
         log "FAIL  uv cache (exit ${rc})"
     fi
     return "$rc"
+}
+
+# True when $1 is a running process. ps -p also sees processes kill -0 may not
+# be allowed to signal.
+pid_alive() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$1" 2>/dev/null || /bin/ps -p "$1" >/dev/null 2>&1
+}
+
+# Prunes the pnpm store with the first pnpm that actually starts. On 2026-11-10
+# the pnpm on PATH was corepack's shim, and corepack 0.23 could not run pnpm
+# 12 ("Cannot find module .../corepack/pnpm/12.10.1/bin/pnpm.cjs"), so every
+# run failed before pnpm did anything. A pnpm that cannot start is a broken
+# toolchain, not a full store: it is logged as a warning naming the fix, and
+# the run carries on. A pnpm that starts and then fails to prune still fails.
+prune_pnpm() {
+    local label="pnpm store"
+    if ! have "$PNPM_BIN"; then
+        log "SKIP  ${label} (not installed)"
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "WOULD ${label}: $PNPM_BIN store prune"
+        return 0
+    fi
+    local c out first="" err="" IFS_SAVE="$IFS"
+    local candidates="$PNPM_BIN${PNPM_FALLBACKS:+:$PNPM_FALLBACKS}"
+    IFS=:
+    for c in $candidates; do
+        IFS="$IFS_SAVE"
+        have "$c" || continue
+        if out="$("$c" --version 2>&1)"; then
+            first="$c"
+            break
+        fi
+        [ -n "$err" ] || err="$(printf '%s
+' "$out" | grep -m1 -E 'Error|error' || printf '%s
+' "$out" | head -n 1)"
+    done
+    IFS="$IFS_SAVE"
+    if [ -z "$first" ]; then
+        log "WARN  ${label} skipped: ${PNPM_BIN} does not start (${err:-no output}). If it is corepack's shim, update corepack: npm i -g corepack@latest"
+        return 2
+    fi
+    prune_step "$label" "$first" store prune
+}
+
+# Prints each wpmcp install directory that is safe to remove: keyed on plugin
+# versions (wp-*-plugins-*), stamped .last-used more than WPMCP_IDLE_HOURS ago,
+# and with neither its install nor its pristine lock held by a live run. A run
+# touches .last-used on every install it uses and lasts minutes, so an idle
+# stamp means nothing is testing against it. An install with no stamp is left
+# alone, as the harness's own pruning does.
+idle_wpmcp_installs() {
+    local d base lock held
+    for d in "$WPMCP_CACHE"/wp-*-plugins-*; do
+        [ -d "$d" ] && [ -e "$d/.last-used" ] || continue
+        [ -n "$(find "$d/.last-used" -mmin "+$(( WPMCP_IDLE_HOURS * 60 ))" 2>/dev/null)" ] || continue
+        base="$(basename "$d")"
+        held=0
+        for lock in "$WPMCP_CACHE/locks/install-$base" "$WPMCP_CACHE/locks/pristine-$base"; do
+            [ -d "$lock" ] || continue
+            # A lock without a pid is being taken right now.
+            if [ ! -f "$lock/pid" ] || pid_alive "$(cat "$lock/pid" 2>/dev/null)"; then
+                held=1
+            fi
+        done
+        [ "$held" -eq 0 ] && printf '%s
+' "$d"
+    done
+}
+
+# Prints each per-run core copy whose run has exited. The harness names them
+# <hash>-<pid> and removes its own on exit; these are what killed runs left.
+dead_wpmcp_cores() {
+    local c pid
+    for c in "$WPMCP_CACHE"/cores/*-*; do
+        [ -d "$c" ] || continue
+        pid="${c##*-}"
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        pid_alive "$pid" || printf '%s
+' "$c"
+    done
+}
+
+# True when the wpmcp checkout's harness has its own --prune.
+wpmcp_has_prune() {
+    [ -f "$WPMCP_REPO/bin/test-local.sh" ] && grep -qE -- '--prune\)' "$WPMCP_REPO/bin/test-local.sh"
+}
+
+# The wpmcp test cache held 19GB on 2026-10-08 and filled the disk again on
+# 2026-11-09: every run cloned a WordPress core and left it behind when killed,
+# and superseded installs lingered. The harness's own --prune is preferred
+# when the checkout has it. Otherwise only idle installs and dead runs' cores
+# are removed; mariadb/ (the test database server), configs/, locks/ and
+# notes/ are never touched.
+prune_wpmcp_tests() {
+    local label="wpmcp tests"
+    case "$WPMCP_CACHE" in
+        */wpmcp-tests) ;;
+        *) log "SKIP  ${label} (${WPMCP_CACHE} is not a wpmcp-tests directory)"; return 0 ;;
+    esac
+    if [ ! -d "$WPMCP_CACHE" ]; then
+        log "SKIP  ${label} (not present)"
+        return 0
+    fi
+    if wpmcp_has_prune; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "WOULD ${label}: bin/test-local.sh --prune in ${WPMCP_REPO}"
+            return 0
+        fi
+        local rc=0
+        log "START ${label}: bin/test-local.sh --prune in ${WPMCP_REPO}"
+        (cd "$WPMCP_REPO" && WPMCP_TEST_CACHE="$WPMCP_CACHE" bash bin/test-local.sh --prune) >> "$LOG" 2>&1 || rc=$?
+        if [ "$rc" -eq 0 ]; then log "OK    ${label}"; else log "FAIL  ${label} (exit ${rc})"; fi
+        return "$rc"
+    fi
+
+    local rc=0 found=0 entry
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        found=$(( found + 1 ))
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "WOULD ${label}: remove ${entry}"
+            continue
+        fi
+        if rm -rf "$entry" >> "$LOG" 2>&1; then
+            log "OK    ${label}: removed ${entry}"
+        else
+            rc=1
+            log "FAIL  ${label}: ${entry}"
+        fi
+    done < <(idle_wpmcp_installs; dead_wpmcp_cores)
+    if [ "$found" -eq 0 ]; then
+        log "OK    ${label} (no install idle ${WPMCP_IDLE_HOURS}h+, no dead run's core)"
+    fi
+    return "$rc"
+}
+
+# Prints the key of each npx cache entry idle TARGET_MAX_AGE_DAYS+ that no
+# running process uses. npx installs every package spec it runs (each MCP
+# server version, one-off tools) into its own directory and never removes any:
+# 66 of them held 3.6GB here, 48 untouched for a month.
+idle_npx_keys() {
+    [ -d "$NPX_DIR" ] || return 0
+    local running d key
+    running="$("$PS_BIN" -axo command= 2>/dev/null || true)"
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        key="$(basename "$d")"
+        case "$running" in *"/_npx/${key}/"*) continue ;; esac
+        printf '%s
+' "$key"
+    done < <(find "$NPX_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+${TARGET_MAX_AGE_DAYS}" 2>/dev/null)
+}
+
+# Removes idle npx entries with npm's own `npm cache npx rm`. Each one is
+# reinstalled the next time its package is run through npx.
+prune_npx() {
+    local label="npx cache"
+    if ! have "$NPM_BIN"; then
+        log "SKIP  ${label} (npm not installed)"
+        return 0
+    fi
+    local keys=() k
+    while IFS= read -r k; do [ -n "$k" ] && keys+=("$k"); done < <(idle_npx_keys)
+    if [ "${#keys[@]}" -eq 0 ]; then
+        log "OK    ${label} (nothing idle for ${TARGET_MAX_AGE_DAYS}+ days)"
+        return 0
+    fi
+    prune_step "$label" "$NPM_BIN" cache npx rm "${keys[@]}"
 }
 
 # Prints the manifest path of every Rust project whose target/ has gone stale.
@@ -400,11 +598,55 @@ prune_docker() {
     return "$rc"
 }
 
+# One run at a time. On 2026-11-10 a forced run started while the scheduled
+# one was still waiting on uv, and the two interleaved in the log. A lock whose
+# holder has died is taken over.
+take_run_lock() {
+    local holder
+    if mkdir "$RUN_LOCK" 2>/dev/null; then
+        echo $$ > "$RUN_LOCK/pid"
+        trap 'rm -rf "$RUN_LOCK"' EXIT
+        return 0
+    fi
+    holder="$(cat "$RUN_LOCK/pid" 2>/dev/null || true)"
+    if pid_alive "$holder"; then
+        log "SKIP  another run (pid ${holder}) is in progress"
+        exit 0
+    fi
+    rm -rf "$RUN_LOCK"
+    take_run_lock
+}
+
+# Free GB the next run would see if space keeps falling at the rate since the
+# previous run, or nothing when there is no recent sample or space is not
+# falling. The guard stays the design: this only lets a disk filling fast
+# (a test harness cloning installs, say) be cleaned before it crosses the
+# threshold, rather than two hours after.
+projected_free() {
+    [ -f "$STATE" ] || return 0
+    local at prev now
+    read -r at prev < "$STATE" 2>/dev/null || return 0
+    case "$at$prev" in ''|*[!0-9]*) return 0 ;; esac
+    now="$(date +%s)"
+    [ $(( now - at )) -le $(( RATE_WINDOW_HOURS * 3600 )) ] || return 0
+    [ "$prev" -gt "$1" ] || return 0
+    printf '%d' $(( $1 - (prev - $1) ))
+}
+
+record_free() {
+    printf '%s %s\n' "$(date +%s)" "$1" > "$STATE" 2>/dev/null || true
+}
+
 before="$(free_gb)"
 if [ -z "$before" ]; then
     log "ABORT could not read free space on ${VOLUME}"
     notify "could not read free space on ${VOLUME}"
     exit 1
+fi
+projected="$(projected_free "$before")"
+falling=0
+if [ -n "$projected" ] && [ "$projected" -lt "$MIN_FREE_GB" ]; then
+    falling=1
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -421,10 +663,33 @@ if [ "$DRY_RUN" -eq 1 ]; then
         printf '  %-8s %s\n' "${t%%:*}" "${found_at:-(not found)}"
     done
     echo
-    if [ "$before" -ge "$MIN_FREE_GB" ] && [ "$FORCE" -eq 0 ]; then
+    [ -n "$projected" ] && echo "projected: ${projected}GB by the next run, at the rate since the last one"
+    if [ "$before" -ge "$MIN_FREE_GB" ] && [ "$FORCE" -eq 0 ] && [ "$falling" -eq 0 ]; then
         echo "would do nothing: above threshold"
     else
-        echo "would prune: uv, pnpm, npm, brew, unavailable simulators, docker build cache and dangling images"
+        echo "would prune: uv, pnpm, npm, idle npx entries, brew, unavailable simulators, docker build cache and dangling images"
+        echo
+        echo "wpmcp test cache (${WPMCP_CACHE}):"
+        if wpmcp_has_prune; then
+            echo "  bin/test-local.sh --prune in ${WPMCP_REPO}"
+        else
+            n=0
+            while IFS= read -r e; do
+                [ -n "$e" ] || continue
+                n=$(( n + 1 ))
+                printf '  %6s  %s\n' "$(du -sh "$e" 2>/dev/null | cut -f1)" "$e"
+            done < <(idle_wpmcp_installs; dead_wpmcp_cores)
+            [ "$n" -eq 0 ] && echo "  (none)"
+        fi
+        echo
+        echo "npx cache entries idle ${TARGET_MAX_AGE_DAYS}+ days and not running:"
+        n=0
+        while IFS= read -r k; do
+            [ -n "$k" ] || continue
+            n=$(( n + 1 ))
+            printf '  %6s  %s\n' "$(du -sh "$NPX_DIR/$k" 2>/dev/null | cut -f1)" "$k"
+        done < <(idle_npx_keys)
+        [ "$n" -eq 0 ] && echo "  (none)"
         echo
         echo "Rust target/ dirs idle ${TARGET_MAX_AGE_DAYS}+ days:"
         n=0
@@ -462,22 +727,31 @@ fi
 
 # The common case: enough space, so leave the caches alone. Logged anyway, so a
 # quiet log is evidence the job is running rather than evidence it is broken.
-if [ "$before" -ge "$MIN_FREE_GB" ] && [ "$FORCE" -eq 0 ]; then
+take_run_lock
+
+if [ "$before" -ge "$MIN_FREE_GB" ] && [ "$FORCE" -eq 0 ] && [ "$falling" -eq 0 ]; then
     log "OK    ${before}GB free on ${VOLUME}, threshold ${MIN_FREE_GB}GB, nothing to do"
+    record_free "$before"
     exit 0
 fi
 
 log "=============================================================="
 if [ "$FORCE" -eq 1 ]; then
     log "cleanup starting (forced), ${before}GB free on ${VOLUME}"
+elif [ "$before" -ge "$MIN_FREE_GB" ]; then
+    log "cleanup starting, free space falling fast: ${before}GB now, about ${projected}GB by the next run at this rate, threshold ${MIN_FREE_GB}GB"
 else
     log "cleanup starting, ${before}GB free is below the ${MIN_FREE_GB}GB threshold"
 fi
 
 failed=""
+warned=""
 prune_uv                                                                || failed="${failed} uv"
-prune_step "pnpm store"     "$PNPM_BIN"  store prune                  || failed="${failed} pnpm"
+prune_pnpm; rc=$?
+if [ "$rc" -eq 2 ]; then warned="${warned} pnpm"; elif [ "$rc" -ne 0 ]; then failed="${failed} pnpm"; fi
 prune_step "npm cache"      "$NPM_BIN"   cache clean --force          || failed="${failed} npm"
+prune_npx                                                               || failed="${failed} npx"
+prune_wpmcp_tests                                                       || failed="${failed} wpmcp"
 prune_step "brew cleanup"   "$BREW_BIN"  cleanup --prune=all          || failed="${failed} brew"
 prune_step "stale sims"     "$XCRUN_BIN" simctl delete unavailable    || failed="${failed} simulators"
 prune_cargo_targets                                                     || failed="${failed} cargo"
@@ -489,6 +763,8 @@ after="$(free_gb)"
 after="${after:-$before}"
 reclaimed=$(( after - before ))
 log "RESULT: ${before}GB -> ${after}GB free (${reclaimed}GB reclaimed)"
+record_free "$after"
+[ -n "$warned" ] && log "RESULT: warnings:${warned}"
 
 # A run that reclaims nothing on a nearly full disk must not be silent. On
 # 2026-10-08 the job logged "2GB -> 2GB free" and exited 0, and nobody knew

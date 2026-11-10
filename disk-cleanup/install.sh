@@ -130,5 +130,6 @@ info "Plist: $PLIST"
 info "Script: $SOURCE"
 info "Log:    \$HOME/Library/Logs/disk-cleanup.log"
 echo
-info "It prunes package caches, idle Rust and Flutter builds, DerivedData and"
+info "It prunes package caches, idle npx installs, the wpmcp test cache, idle"
+info "Rust and Flutter builds, DerivedData and"
 info "Docker build cache, and alerts if space stays low. It never touches user data."
